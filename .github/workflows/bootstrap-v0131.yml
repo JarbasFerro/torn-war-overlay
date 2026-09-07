@@ -18,6 +18,7 @@ jobs:
       - name: Reconstruct canonical userscript
         shell: bash
         run: |
+          # Payload chunks were verified against local Git blob hashes before this retry.
           cat .bootstrap/payload-*.txt | tr -d '\n' | base64 -d | bunzip2 > torn-war-overlay.user.js
           echo '77ae2130f032f6ec0f158d43ad70a84477ad27ec859f7df119d14968e5949943  torn-war-overlay.user.js' | sha256sum -c -
           grep -q '^// @version      0.13.1$' torn-war-overlay.user.js
