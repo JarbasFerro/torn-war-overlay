@@ -10,7 +10,7 @@ This file contains the copy, metadata recommendations and publication settings f
 
 Use this as the userscript `@description` and Greasy Fork summary:
 
-> Ranked-war target overlay for Torn with server-synced hospital countdowns, configurable green/yellow highlighting, activity/age context, current-war attack history, and adaptive API polling.
+> Ranked-war target overlay for Torn with server-synced hospital countdowns, configurable target highlighting, activity/age context, current-war attack history, and adaptive API polling.
 
 ## Recommended metadata block
 
@@ -20,10 +20,11 @@ Keep the existing namespace stable so userscript managers recognise updates corr
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.13.0
-// @description  Ranked-war target overlay for Torn with server-synced hospital countdowns, configurable green/yellow highlighting, activity/age context, current-war attack history, and adaptive API polling.
+// @version      0.13.1
+// @description  Ranked-war target overlay for Torn with server-synced hospital countdowns, configurable target highlighting, activity/age context, current-war attack history, and adaptive API polling.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
+// @homepageURL  https://github.com/JarbasFerro/torn-war-overlay
 // @supportURL   https://github.com/JarbasFerro/torn-war-overlay/issues
 // @match        https://www.torn.com/factions.php*
 // @connect      api.torn.com
@@ -130,11 +131,11 @@ The following is ready to paste into the Greasy Fork description field.
 
 ## Greasy Fork source-sync setup
 
-Once the canonical production file exists at the repository root as:
+The canonical production file is committed to the repository root as:
 
 `/torn-war-overlay.user.js`
 
-use this branch-based raw URL as Greasy Fork's source/sync URL:
+Use this branch-based raw URL as Greasy Fork's source/sync URL:
 
 `https://raw.githubusercontent.com/JarbasFerro/torn-war-overlay/main/torn-war-overlay.user.js`
 
@@ -167,14 +168,15 @@ Do not add unrelated game/tool names merely for search placement.
 
 Before the first public release:
 
-- [ ] Canonical `torn-war-overlay.user.js` committed to `main`.
-- [ ] `@name`, `@namespace`, `@version`, `@description` and `@match` verified.
-- [ ] `@supportURL` points to GitHub Issues.
-- [ ] Licence/copyright metadata confirmed.
-- [ ] No secrets or API keys committed.
-- [ ] No minified or obfuscated production code.
-- [ ] Syntax check passes.
-- [ ] Torn PDA real-device smoke test passes.
+- [x] Canonical `torn-war-overlay.user.js` committed to `main`.
+- [x] `@name`, `@namespace`, `@version`, `@description` and `@match` verified.
+- [x] `@homepageURL` points to the GitHub repository.
+- [x] `@supportURL` points to GitHub Issues.
+- [x] Licence/copyright metadata confirmed.
+- [x] No secrets or API keys committed.
+- [x] No minified or obfuscated production code.
+- [x] Syntax check passes.
+- [x] Torn PDA real-device smoke test passes for the v0.13 release-candidate line.
 - [ ] Standard userscript-manager smoke test performed if claiming compatibility.
 - [ ] Greasy Fork full description pasted and reviewed.
 - [ ] GitHub raw source sync configured.
@@ -183,4 +185,4 @@ Before the first public release:
 
 ## First-release recommendation
 
-Publish the current release-candidate line only after the canonical source and metadata are committed. If no functional code change is needed, a metadata/distribution cleanup can be released as `0.13.1`; otherwise the next functional hardening release should increment normally.
+**v0.13.1 is ready to use as the first Greasy Fork publication candidate.** It is the v0.13 release-candidate code with finalized distribution metadata and a canonical GitHub source file; no tactical behavior was changed for this distribution release.
