@@ -4,6 +4,13 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.13.1 - Distribution metadata and canonical source
+
+- Published the canonical production userscript at the repository root as `torn-war-overlay.user.js`.
+- Finalized Greasy Fork distribution metadata, including author, licence, homepage and support links, while keeping the userscript namespace stable.
+- Updated internal release/version identifiers to 0.13.1.
+- No tactical targeting, polling or attack-history behaviour changed from v0.13.0.
+
 ## 0.13.0 - Release candidate hardening
 
 - Fixed a background/resume lifecycle bug from v0.12.
