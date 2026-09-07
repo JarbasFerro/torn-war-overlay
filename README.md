@@ -72,9 +72,11 @@ The overlay is intentionally conservative with both API usage and DOM work:
 
 ## Installation
 
-The preferred public installation route will be **Greasy Fork** once the initial listing is published.
+The canonical production source is [`torn-war-overlay.user.js`](./torn-war-overlay.user.js) in the repository root.
 
-For Torn PDA, the script can also be imported directly as a userscript. The canonical source will be maintained in this repository.
+The preferred public installation route will be **Greasy Fork** once the initial listing is published and configured to sync from this repository.
+
+For Torn PDA, the canonical userscript can also be imported directly from this repository.
 
 ## Support
 
@@ -94,9 +96,11 @@ Do **not** post API keys in an issue.
 
 ## Development status
 
-Current release candidate: **v0.13.0**.
+Current release candidate: **v0.13.1**.
 
-The project has already been tested during real ranked-war use. v0.13 is the release-candidate hardening line before the first stable v1.0 release.
+v0.13.1 is the canonical GitHub/Greasy Fork distribution build. It contains metadata and distribution cleanup over v0.13.0 without changing the tactical targeting behaviour.
+
+The project has already been tested during real ranked-war use. The v0.13 line is the release-candidate hardening line before the first stable v1.0 release.
 
 ## Disclaimer
 
