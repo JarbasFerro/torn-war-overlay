@@ -74,9 +74,17 @@ The overlay is intentionally conservative with both API usage and DOM work:
 
 The canonical production source is [`torn-war-overlay.user.js`](./torn-war-overlay.user.js) in the repository root.
 
-The preferred public installation route will be **Greasy Fork** once the initial listing is published and configured to sync from this repository.
+The preferred public installation route is **Greasy Fork**, with this repository retained as the canonical source and development record.
 
 For Torn PDA, the canonical userscript can also be imported directly from this repository.
+
+## Future development research
+
+The post-release research into higher-leverage war features is documented in [`docs/TACTICAL-INTELLIGENCE-ROADMAP.md`](./docs/TACTICAL-INTELLIGENCE-ROADMAP.md).
+
+The proposed direction is to evolve the overlay from basic target visibility toward **personal tactical intelligence**, beginning with observed Fair Fight memory, personal win confidence, expected ranked-war score per 25 energy and a transparent `BEST` target recommendation. Later research covers enemy release behavior, target contention, war momentum, safe chain-bonus targets and optional faction-level suppression intelligence.
+
+The roadmap is research and planning, not a description of currently implemented functionality.
 
 ## Support
 
