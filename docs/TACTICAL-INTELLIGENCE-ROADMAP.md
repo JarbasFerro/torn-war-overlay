@@ -2,8 +2,22 @@
 
 **Project:** Torn War Overlay  
 **Research date:** 8 September 2026  
-**Status:** Research / future development — not yet implemented  
+**Status:** Sections 3, 4, 5, 10 (partial), 11 (partial) and 12 are implemented in v0.14.0; the rest remains research  
 **Current production baseline when this document was written:** v0.13.1
+
+## Addendum (8 September 2026): corrections from the API verification pass and the v0.14.0 implementation
+
+Verified against Torn OpenAPI 6.13.2 and the rules page snapshot of 28 August 2026 before implementing v0.14.0:
+
+1. **`/user/attacksfull` carries no Fair Fight or modifier data.** It returns only ids, timestamps, simplified attacker/defender, result and `respect_gain`/`respect_loss`. The "retain more of the data already downloaded" assumption in section 3 was wrong for Fair Fight. v0.14.0 moved the incremental poll to `/user/attacks` (100 rows per page, `modifiers.fair_fight`, `is_ranked_war`, defender level and faction) with a paginated backfill.
+2. **Expected score is modelable, not just averaged.** Respect per hit is `floor((1 + level/200) × 100) / 100 × 2 (war) × Fair Fight × chain scale` for Leave/Hospitalize (Mug is 0.75×; never recommend it). v0.14.0 predicts the score from level, projected Fair Fight and the next chain position, and falls back to the median observed ranked-war respect only when Fair Fight is unknown.
+3. **Fair Fight inverts into an opponent battle-stat score.** `FF = min(3, 1 + 8/3 × their score / your score)` where score is the sum of rounded square roots of the four stats. With `/user/battlestats` (Limited) the script re-projects the expected Fair Fight as the user's stats grow. A capped 3.00 is only a lower bound and is labelled as risk.
+4. **Live war state is one Public request.** `/faction/wars` returns the current ranked war with score, target and both chains; `/faction/{id}/chain` is public for any faction. v0.14.0 shows the war lead versus target, next decay time (1% of the original target per hour after 24 h) and the own chain with a bonus-hit warning (section 12 and part of sections 10 and 11).
+5. **Public personalstats are a cold-start strength proxy.** `/user/{id}/personalstats` with a Public key returns xanax taken, refills, energy drinks, stat enhancers, elo, attacks won/lost and highest level beaten (up to ten stats per request). This solves the cold-start problem of purely personal memory and is the recommended next step (v0.15) ahead of the release-fingerprint work.
+6. **Rules changed on 27 January 2026.** Software must not extract data from unfocused pages to generate alerts or draw attention to another window. The foreground-only design complies; do not add sounds, tab-title flashing or webhooks. A Torn API ToS disclosure table is now required wherever a key is collected.
+7. **`Attack.chain` becomes `null` instead of `0` on 1 January 2027.** v0.14.0 normalizes both.
+
+Revised sequence: v0.15 = public strength proxy + retaliation flag (optional faction tier); v0.16 = release fingerprint, contention and regime-change refinements; later = suppression value and dynamic LEAVE/HOSP.
 
 ## Purpose
 

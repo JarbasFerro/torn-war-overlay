@@ -10,7 +10,7 @@ This file contains the copy, metadata recommendations and publication settings f
 
 Use this as the userscript `@description` and Greasy Fork summary:
 
-> Ranked-war target overlay for Torn with server-synced hospital countdowns, configurable target highlighting, activity/age context, current-war attack history, and adaptive API polling.
+> Ranked-war target overlay for Torn with server-synced hospital countdowns, configurable target highlighting, activity/age context, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling.
 
 ## Recommended metadata block
 
@@ -20,8 +20,8 @@ Keep the existing namespace stable so userscript managers recognise updates corr
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.13.1
-// @description  Ranked-war target overlay for Torn with server-synced hospital countdowns, configurable target highlighting, activity/age context, current-war attack history, and adaptive API polling.
+// @version      0.14.0
+// @description  Ranked-war target overlay for Torn with server-synced hospital countdowns, configurable target highlighting, activity/age context, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
 // @homepageURL  https://github.com/JarbasFerro/torn-war-overlay
@@ -65,6 +65,9 @@ The following is ready to paste into the Greasy Fork description field.
   <li>Option to include or exclude Idle players from target selection.</li>
   <li>Early Discharge and revive-risk context.</li>
   <li>Up to five recent outgoing attack-result dots per opponent, scoped to the current ranked war.</li>
+  <li>Personal intel per opponent learned from your own attacks: observed Fair Fight, expected score per hit, <code>EV</code> per 25 energy and a <code>PROVEN | LIKELY | UNKNOWN | RISK | CHANGED</code> confidence label with an explanation on tap/hover.</li>
+  <li>A single <code>★ BEST</code> recommendation among current green targets; switches to the safest proven target when your next chain hit is a bonus hit.</li>
+  <li><code>WAR</code> and <code>CHAIN</code> context chips: score lead versus target, next target-decay time, chain count and timer, bonus-hit warning.</li>
   <li>Adaptive API polling, caching and incremental attack-history updates to reduce unnecessary API usage.</li>
 </ul>
 
@@ -96,7 +99,21 @@ The following is ready to paste into the Greasy Fork description field.
   <li><strong>Grey</strong>: stalemate or another non-decisive result</li>
 </ul>
 
-<p>The main overlay works with a Public-capability Torn API key. Attack-history dots require a Limited key or an appropriately scoped Custom key with access to the user attack-history endpoint.</p>
+<p>The main overlay works with a Public-capability Torn API key. Attack-history dots and personal intel require a Limited key or a Custom key that grants <code>user -> attacks</code> and <code>user -> battlestats</code>.</p>
+
+<h3>Personal intel</h3>
+
+<p>Nothing is fetched from third-party scouting services. Fair Fight is a pure function of both players' battle-stat scores, so one fight against an opponent yields their score, and the script re-projects the expected Fair Fight as your stats grow. Expected score uses Torn's respect model (level base, x2 war, Fair Fight, chain scale). Confidence labels are explicit: one fight never shows as high confidence, and evidence older than 180 days is discounted. <code>★ BEST</code> is the green target with the highest expected value per 25 energy among proven or likely opponents.</p>
+
+<h3>Torn API ToS disclosure</h3>
+
+<table>
+  <tr><th>Data storage</th><td>Faction statuses, account ages, your own attack results and derived opponent intel are stored locally on the device/browser only.</td></tr>
+  <tr><th>Data sharing</th><td>None. No backend, no analytics, no third-party service.</td></tr>
+  <tr><th>Purpose of use</th><td>Ranked-war target overlay on the faction page.</td></tr>
+  <tr><th>Key storage and sharing</th><td>Manual keys are stored in local browser storage and sent only to api.torn.com. Torn PDA supplies its own key. Keys are never shared.</td></tr>
+  <tr><th>Key access level</th><td>Public for the core overlay. Limited (or Custom with user -> attacks and user -> battlestats) for personal intel.</td></tr>
+</table>
 
 <h3>Privacy and API usage</h3>
 
@@ -106,7 +123,7 @@ The following is ready to paste into the Greasy Fork description field.
   <li>No advertising.</li>
   <li>No third-party scouting/strength service.</li>
   <li>No automated attacks, attack clicks or attack initiation.</li>
-  <li>No hidden-tab target alerts.</li>
+  <li>No hidden-tab target alerts; nothing is extracted from or alerted about an unfocused page.</li>
   <li>Manual API keys, when used, remain stored locally on the device/browser and are used by this script only for Torn API requests.</li>
 </ul>
 
@@ -185,4 +202,6 @@ Before the first public release:
 
 ## First-release recommendation
 
-**v0.13.1 is ready to use as the first Greasy Fork publication candidate.** It is the v0.13 release-candidate code with finalized distribution metadata and a canonical GitHub source file; no tactical behavior was changed for this distribution release.
+**v0.13.1 was the first Greasy Fork publication candidate.** It is the v0.13 release-candidate code with finalized distribution metadata and a canonical GitHub source file; no tactical behavior was changed for this distribution release.
+
+**v0.14.0** adds personal intel and the ToS disclosure table above. Publish it only after a real ranked-war validation pass on Torn PDA, and paste the updated description (including the ToS table) into the listing when the version is synced.

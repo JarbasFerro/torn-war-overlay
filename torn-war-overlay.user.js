@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.13.1
-// @description  Ranked-war target overlay for Torn with server-synced hospital countdowns, configurable target highlighting, activity/age context, current-war attack history, and adaptive API polling.
+// @version      0.14.0
+// @description  Ranked-war target overlay for Torn with server-synced hospital countdowns, configurable target highlighting, activity/age context, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
 // @homepageURL  https://github.com/JarbasFerro/torn-war-overlay
@@ -21,24 +21,27 @@
   if (!/(^|\.)torn\.com$/i.test(location.hostname) || location.pathname !== '/factions.php') return;
 
   const SCRIPT = 'Torn War Overlay';
-  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0131__';
+  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0140__';
   if (window[INSTANCE_KEY]) {
-    console.warn(`[${SCRIPT}] v0.13.1 is already running; duplicate injection ignored.`);
+    console.warn(`[${SCRIPT}] v0.14.0 is already running; duplicate injection ignored.`);
     return;
   }
   window[INSTANCE_KEY] = true;
 
   const API_BASE = 'https://api.torn.com/v2';
-  const API_COMMENT = 'two-v0.13.1';
+  const API_COMMENT = 'two-v0.14.0';
   const PDA_API_KEY = '###PDA-APIKEY###';
 
   const KEY_STORAGE = 'two.apiKey.v1';
   const SIGNUP_CACHE_STORAGE = 'two.signupCache.v2';
   const LEGACY_PROFILE_CACHE_STORAGE = 'two.profileCache.v1';
   const FACTION_STATUS_CACHE_STORAGE = 'two.factionStatusCache.v2';
-  const ATTACK_HISTORY_CACHE_STORAGE = 'two.attackHistoryCache.v2';
+  const LEGACY_ATTACK_HISTORY_CACHE_STORAGE = 'two.attackHistoryCache.v2';
+  const ATTACK_HISTORY_CACHE_STORAGE = 'two.attackHistoryCache.v3';
   const ATTACK_API_KEY_STORAGE = 'two.attackApiKey.v1';
   const SETTINGS_STORAGE = 'two.settings.v1';
+  const OPPONENT_INTEL_STORAGE = 'two.opponentIntel.v1';
+  const SELF_INTEL_STORAGE = 'two.selfIntel.v1';
 
   const STATUS_REFRESH_ACTIVE_MS = 10_000;
   const STATUS_REFRESH_WATCH_MS = 20_000;
@@ -56,11 +59,27 @@
   const DOM_OKAY_OVERRIDE_TTL_MS = 15_000;
   const ATTACK_RESULTS_LIMIT = 5;
   const ATTACKS_REFRESH_MS = 30_000;
-  const ATTACKS_FETCH_LIMIT = 1000;
+  const ATTACKS_PAGE_LIMIT = 100; // /user/attacks hard page cap (needed for Fair Fight modifiers).
+  const ATTACKS_PAGES_PER_CYCLE = 5; // Backfill is spread across 30 s cycles so startup stays well under Torn's 100 req/min.
+  const ATTACK_CURSOR_OVERLAP_SEC = 330; // An attack lasts at most 5 minutes; overlap so cursor-by-start never skips one.
   const ATTACKS_CACHE_MAX_AGE_MS = 30 * 60_000;
   const ATTACK_HISTORY_FALLBACK_WINDOW_SEC = 24 * 60 * 60;
-  const WAR_CONTEXT_REFRESH_MS = 5 * 60_000;
+  const WAR_CONTEXT_REFRESH_MS = 60_000;
   const WAR_CONTEXT_FALLBACK_REFRESH_MS = 60_000;
+  const CHAIN_REFRESH_MS = 30_000;
+  const SELF_STATS_REFRESH_MS = 6 * 60 * 60_000;
+  const INTEL_RECENT_SAMPLES = 12;
+  const INTEL_MAX_OPPONENTS = 600;
+  const INTEL_RETENTION_MS = 240 * 24 * 60 * 60_000;
+  const INTEL_SAMPLE_MAX_AGE_MS = 180 * 24 * 60 * 60_000;
+  const INTEL_FF_MAX_AGE_MS = 120 * 24 * 60 * 60_000;
+  const INTEL_SEEN_IDS_MAX = 3000;
+  const INTEL_SAVE_DEBOUNCE_MS = 2_000;
+  const FAIR_FIGHT_CAP = 3;
+  const WAR_RESPECT_MULTIPLIER = 2;
+  const CHAIN_BONUS_HITS = Object.freeze([10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000]);
+  const RESUME_DEBOUNCE_MS = 300;
+  const RESUME_SNAPSHOT_REUSE_MS = 3_000;
   const TARGET_FLASH_MS = 1_400;
   const EMPTY_ROWS_GRACE_MS = 2_000;
   const MAX_PERSISTED_FACTION_CACHES = 20;
@@ -74,6 +93,7 @@
     yellowHospitalSec: 5 * 60,
     maxLevel: null,
     allowIdle: true,
+    showIntel: true,
     diagnosticMode: false,
   });
 
@@ -120,7 +140,18 @@
   let warContextLastCheckedAt = 0;
   let warContextInFlight = null;
   let attackHistoryScope = null;
-  let attackHistoryLastEnded = 0;
+  let attackHistoryCursor = 0; // Highest attack `started` timestamp merged for the current scope.
+  let attackHistoryBackfillTo = null; // Oldest `started` reached while paging backwards; null when nothing older remains.
+  let attackHistoryBackfillDone = false;
+  let ownChain = null; // { current, timeout, cooldown, fetchedAtPerf }
+  let ownChainLastFetchedAt = 0;
+  let ownChainUnsupported = false;
+  let selfStatsLastFetchedAt = 0;
+  let selfStatsInFlight = null;
+  let intelSaveTimer = null;
+  let bestTargetUserId = null;
+  let bestTargetReason = '';
+  let resumeTimer = null;
   let renderFrame = null;
   let fullRenderQueued = false;
   let watchdogTimer = null;
@@ -142,6 +173,11 @@
     resumeCount: 0,
     watchdogRecoveries: 0,
     transportTimeouts: 0,
+    intelAttacksProcessed: 0,
+    intelAttacksSkipped: 0,
+    chainRefreshes: 0,
+    selfStatsRefreshes: 0,
+    bestRecommendations: 0,
   };
 
   const rowsByUser = new Map();
@@ -177,6 +213,9 @@
   const signupCache = loadSignupCache();
   const factionStatusCache = loadObjectJson(FACTION_STATUS_CACHE_STORAGE, {});
   const attackHistoryCache = loadObjectJson(ATTACK_HISTORY_CACHE_STORAGE, {});
+  const opponentIntel = loadOpponentIntel();
+  const selfIntel = loadObjectJson(SELF_INTEL_STORAGE, {});
+  const processedAttackIds = new Set(Array.isArray(opponentIntel.seen) ? opponentIntel.seen.map(Number).filter(Number.isFinite) : []);
   let settings = null;
 
   class ApiError extends Error {
@@ -272,8 +311,13 @@
       yellowHospitalSec,
       maxLevel,
       allowIdle: source.allowIdle !== undefined ? Boolean(source.allowIdle) : DEFAULT_SETTINGS.allowIdle,
+      showIntel: source.showIntel !== undefined ? Boolean(source.showIntel) : DEFAULT_SETTINGS.showIntel,
       diagnosticMode: false,
     };
+  }
+
+  function intelEnabled() {
+    return settings?.showIntel !== false;
   }
 
   function loadSettings() {
@@ -323,12 +367,14 @@
     const levelRaw = window.prompt(`${SCRIPT}: optional maximum level (leave blank for no limit)`, current.maxLevel == null ? '' : String(current.maxLevel));
     if (levelRaw === null) return false;
     const allowIdle = window.confirm(`${SCRIPT}: should Idle players count as targets?\n\nOK = yes\nCancel = no`);
+    const showIntel = window.confirm(`${SCRIPT}: show personal intel (observed Fair Fight, expected score, BEST target)?\n\nOK = yes\nCancel = no`);
     const next = sanitizeSettings({
       maxAgeYears: Number(ageRaw),
       greenHospitalSec: Number(greenRaw),
       yellowHospitalSec: Number(yellowRaw),
       maxLevel: String(levelRaw).trim() === '' ? null : Number(levelRaw),
       allowIdle,
+      showIntel,
       diagnosticMode: false,
     });
 
@@ -369,6 +415,7 @@
   try {
     localStorage.removeItem('two.pins.v1');
     localStorage.removeItem('two.attackHistoryCache.v1');
+    localStorage.removeItem(LEGACY_ATTACK_HISTORY_CACHE_STORAGE);
   } catch { /* legacy cleanup */ }
   settings.diagnosticMode = false;
   saveSettings();
@@ -413,7 +460,7 @@
   }
 
   function setManualApiKey() {
-    const entered = window.prompt(`${SCRIPT}: paste a Torn API key. Public access is enough for the main overlay; a Limited key is needed for the recent attack-result dots.`);
+    const entered = window.prompt(`${SCRIPT}: paste a Torn API key.\n\nPublic access is enough for the main overlay. A Limited key unlocks personal intel (attack results, observed Fair Fight, expected score).\n\nData storage: on this device only. Data sharing: none. Purpose: ranked-war target overlay. Key storage: local browser storage, sent only to api.torn.com.`);
     if (entered === null) return false;
     if (!isLikelyApiKey(entered)) {
       window.alert(`${SCRIPT}: that does not look like a 16-character Torn API key.`);
@@ -432,7 +479,7 @@
   }
 
   function setAttackApiKey() {
-    const entered = window.prompt(`${SCRIPT}: recent attack-result dots require either a Limited key or a Custom key that grants user -> attacksfull. This key is stored only in your browser and used only for attack history. Paste it here:`);
+    const entered = window.prompt(`${SCRIPT}: personal intel (attack results, observed Fair Fight, expected score) requires a Limited key or a Custom key that grants user -> attacks and user -> battlestats. This key is stored only in your browser and sent only to api.torn.com. Paste it here:`);
     if (entered === null) return false;
     if (!isLikelyApiKey(entered)) {
       window.alert(`${SCRIPT}: that does not look like a 16-character Torn API key.`);
@@ -467,7 +514,7 @@
       : null;
     return {
       script: SCRIPT,
-      version: '0.13.1',
+      version: '0.14.0',
       generatedAt: new Date().toISOString(),
       active: isActiveView(),
       factionId: Number.isFinite(Number(activeFactionId)) ? Number(activeFactionId) : null,
@@ -488,6 +535,20 @@
       ageSearchComplete,
       ageSearchUnavailable,
       filterMode,
+      intel: {
+        enabled: intelEnabled(),
+        opponents: Object.keys(opponentIntel.opponents || {}).length,
+        processedAttackIds: processedAttackIds.size,
+        ownBssKnown: Number.isFinite(Number(selfIntel?.bss)) && Number(selfIntel.bss) > 0,
+        ownBssAgeSec: Number.isFinite(Number(selfIntel?.updatedAt)) ? Math.max(0, Math.floor((Date.now() - Number(selfIntel.updatedAt)) / 1000)) : null,
+        chain: ownChain ? { current: ownChain.current, timeout: ownChain.timeout, cooldown: ownChain.cooldown } : null,
+        war: currentWar ? { id: currentWar.id, target: currentWar.target, ownScore: currentWar.ownScore, enemyScore: currentWar.enemyScore } : null,
+        attackCursor: attackHistoryCursor,
+        backfillTo: attackHistoryBackfillTo,
+        backfillDone: attackHistoryBackfillDone,
+        bestTargetUserId,
+        bestTargetReason,
+      },
       settings: { ...settings },
       timers: {
         faction: Boolean(factionRefreshTimer),
@@ -516,7 +577,7 @@
 
   function showDiagnosticSnapshot() {
     const payload = JSON.stringify(getDiagnosticSnapshot(), null, 2);
-    window.prompt(`${SCRIPT} v0.13.1 diagnostics - copy this text if troubleshooting is needed:`, payload);
+    window.prompt(`${SCRIPT} v0.14.0 diagnostics - copy this text if troubleshooting is needed:`, payload);
     return payload;
   }
 
@@ -539,6 +600,13 @@
       GM_registerMenuCommand('Torn War Overlay: set attack-history key', setAttackApiKey);
       GM_registerMenuCommand('Torn War Overlay: clear attack-history key', clearAttackApiKey);
       GM_registerMenuCommand('Torn War Overlay: clear cached attack dots', () => {
+        localStorage.removeItem(ATTACK_HISTORY_CACHE_STORAGE);
+        window.location.reload();
+      });
+      GM_registerMenuCommand('Torn War Overlay: clear personal intel memory', () => {
+        localStorage.removeItem(OPPONENT_INTEL_STORAGE);
+        localStorage.removeItem(SELF_INTEL_STORAGE);
+        // The attack cursor must go too, otherwise only the newest page would be re-read after the reload.
         localStorage.removeItem(ATTACK_HISTORY_CACHE_STORAGE);
         window.location.reload();
       });
@@ -793,7 +861,7 @@
   async function ensureAttackHistoryCapability() {
     try {
       const info = await ensureAttackKeyInfo();
-      const allowed = keyInfoAllowsUserSelection(info, 'attacksfull');
+      const allowed = keyInfoAllowsUserSelection(info, 'attacks');
       if (!allowed) {
         attackHistoryFeatureState = 'unsupported';
         return false;
@@ -1123,6 +1191,452 @@
     badge.title = `Last ${history.length} outgoing attack result${history.length === 1 ? '' : 's'} vs this player in ${scopeLabel}: ${titleParts.join(' | ')}`;
   }
 
+  // ---------------------------------------------------------------------------
+  // Personal tactical intelligence (v0.14)
+  //
+  // Everything here is derived from the user's own outgoing attack records plus two cheap
+  // context calls (own battle stats, own chain). Nothing is sent anywhere except api.torn.com.
+  // Torn's respect model (Chain wiki, post April 2024):
+  //   respect = base(level) x war(2) x fairFight(1..3) x chainScale x type(leave/hosp 1, mug 0.75) x ...
+  //   base(level) = floor((1 + level/200) * 100) / 100
+  //   chainScale(hit) = hit <= 10 ? 1 : 0.25*log10(hit) + 0.75
+  //   fairFight = min(3, 1 + 8/3 * defenderScore / attackerScore), score = sum(round(sqrt(stat)))
+  // Fair Fight is a pure function of both players' battle-stat scores, so an observed value can
+  // be inverted into an opponent score and re-projected after the user's own stats change.
+  // ---------------------------------------------------------------------------
+
+  function loadOpponentIntel() {
+    const stored = loadObjectJson(OPPONENT_INTEL_STORAGE, {});
+    const opponents = stored.opponents && typeof stored.opponents === 'object' && !Array.isArray(stored.opponents) ? stored.opponents : {};
+    return { v: 1, updatedAt: Number(stored.updatedAt) || 0, opponents, seen: Array.isArray(stored.seen) ? stored.seen : [] };
+  }
+
+  function pruneOpponentIntel() {
+    const now = Date.now();
+    const entries = Object.entries(opponentIntel.opponents || {})
+      .filter(([, record]) => record && Number.isFinite(Number(record.u)) && now - Number(record.u) <= INTEL_RETENTION_MS)
+      .sort((a, b) => Number(b[1].u) - Number(a[1].u))
+      .slice(0, INTEL_MAX_OPPONENTS);
+    opponentIntel.opponents = Object.fromEntries(entries);
+    if (processedAttackIds.size > INTEL_SEEN_IDS_MAX) {
+      // Pages are processed newest-first, so insertion order is not chronological. Keep the highest ids: those are
+      // the ones the cursor overlap window will re-fetch and must recognise.
+      const keep = Array.from(processedAttackIds).sort((a, b) => a - b).slice(-INTEL_SEEN_IDS_MAX);
+      processedAttackIds.clear();
+      for (const id of keep) processedAttackIds.add(id);
+    }
+    opponentIntel.seen = Array.from(processedAttackIds);
+  }
+
+  function flushOpponentIntel() {
+    if (intelSaveTimer) clearTimeout(intelSaveTimer);
+    intelSaveTimer = null;
+    pruneOpponentIntel();
+    opponentIntel.updatedAt = Date.now();
+    saveJson(OPPONENT_INTEL_STORAGE, opponentIntel);
+  }
+
+  function scheduleOpponentIntelSave() {
+    if (intelSaveTimer) return;
+    intelSaveTimer = setTimeout(() => {
+      intelSaveTimer = null;
+      flushOpponentIntel();
+    }, INTEL_SAVE_DEBOUNCE_MS);
+  }
+
+  function baseRespectForLevel(level) {
+    const value = Number(level);
+    if (!Number.isFinite(value) || value <= 0) return null;
+    return Math.floor((1 + value / 200) * 100 + 1e-9) / 100;
+  }
+
+  function chainScaleForHit(hitNumber) {
+    const hit = Number(hitNumber);
+    if (!Number.isFinite(hit) || hit <= 10) return 1;
+    return 0.25 * Math.log10(hit) + 0.75;
+  }
+
+  function isChainBonusHit(hitNumber) {
+    return CHAIN_BONUS_HITS.includes(Number(hitNumber));
+  }
+
+  function battleStatScore(strength, defense, speed, dexterity) {
+    const parts = [strength, defense, speed, dexterity].map(Number);
+    if (parts.some(value => !Number.isFinite(value) || value < 0)) return null;
+    return parts.reduce((sum, value) => sum + Math.round(Math.sqrt(value)), 0);
+  }
+
+  function fairFightFromScores(defenderScore, attackerScore) {
+    const defender = Number(defenderScore);
+    const attacker = Number(attackerScore);
+    if (!Number.isFinite(defender) || !Number.isFinite(attacker) || attacker <= 0 || defender < 0) return null;
+    return Math.min(FAIR_FIGHT_CAP, Math.round((1 + (8 / 3) * (defender / attacker)) * 100) / 100);
+  }
+
+  function defenderScoreFromFairFight(fairFight, attackerScore) {
+    const ff = Number(fairFight);
+    const attacker = Number(attackerScore);
+    if (!Number.isFinite(ff) || !Number.isFinite(attacker) || attacker <= 0 || ff < 1) return null;
+    return (3 / 8) * (ff - 1) * attacker;
+  }
+
+  function getOwnBss() {
+    const bss = Number(selfIntel?.bss);
+    return Number.isFinite(bss) && bss > 0 ? bss : null;
+  }
+
+  async function refreshSelfStats({ force = false } = {}) {
+    if (!intelEnabled() || !apiKey) return getOwnBss();
+    if (selfStatsInFlight) return selfStatsInFlight;
+    const cachedAt = Number(selfIntel?.updatedAt) || 0;
+    if (!force && Date.now() - cachedAt < SELF_STATS_REFRESH_MS) return getOwnBss();
+    if (!force && Date.now() - selfStatsLastFetchedAt < 5 * 60_000) return getOwnBss();
+    selfStatsLastFetchedAt = Date.now();
+
+    const flight = (async () => {
+      try {
+        const info = await ensureAttackKeyInfo();
+        if (!keyInfoAllowsUserSelection(info, 'battlestats')) return getOwnBss();
+        const data = await apiGet('/user/battlestats', { keyOverride: attackApiKey || null });
+        const stats = data?.battlestats;
+        const bss = battleStatScore(stats?.strength?.value, stats?.defense?.value, stats?.speed?.value, stats?.dexterity?.value);
+        if (bss === null) return getOwnBss();
+        selfIntel.bss = bss;
+        selfIntel.updatedAt = Date.now();
+        saveJson(SELF_INTEL_STORAGE, selfIntel);
+        incStat('selfStatsRefreshes');
+        return bss;
+      } catch (err) {
+        if (err?.message !== 'API backoff active.') {
+          console.warn(`[${SCRIPT}] Could not refresh own battle stats; Fair Fight memory will use observed values only.`, err);
+        }
+        return getOwnBss();
+      }
+    })().finally(() => {
+      if (selfStatsInFlight === flight) selfStatsInFlight = null;
+    });
+
+    selfStatsInFlight = flight;
+    return flight;
+  }
+
+  async function refreshOwnChain({ force = false } = {}) {
+    if (!intelEnabled() || !apiKey || apiPermanentlyDisabled || ownChainUnsupported) return ownChain;
+    if (!force && Date.now() - ownChainLastFetchedAt < CHAIN_REFRESH_MS - 1_000) return ownChain;
+    if (Date.now() < globalBackoffUntil) return ownChain;
+    ownChainLastFetchedAt = Date.now();
+    try {
+      const data = await apiGet('/faction/chain', { cacheBust: true });
+      const chain = data?.chain;
+      const current = Number(chain?.current);
+      ownChain = {
+        current: Number.isFinite(current) && current > 0 ? current : 0,
+        timeout: Math.max(0, Number(chain?.timeout) || 0),
+        cooldown: Math.max(0, Number(chain?.cooldown) || 0),
+        max: Math.max(0, Number(chain?.max) || 0),
+        fetchedAtPerf: monotonicNowMs(),
+      };
+      incStat('chainRefreshes');
+    } catch (err) {
+      if (Number(err?.code) === 7 || Number(err?.code) === 16 || (err && !err.retryable && err.message !== 'API backoff active.')) {
+        ownChainUnsupported = true;
+        ownChain = null;
+        console.warn(`[${SCRIPT}] Own chain unavailable for this key; chain scale defaults to 1.0.`, err);
+      } else if (err?.message !== 'API backoff active.') {
+        console.warn(`[${SCRIPT}] Could not refresh own chain; chain scale defaults to 1.0.`, err);
+      }
+    }
+    return ownChain;
+  }
+
+  function getChainSnapshot() {
+    if (!ownChain) return null;
+    const elapsed = Math.max(0, Math.floor((monotonicNowMs() - ownChain.fetchedAtPerf) / 1000));
+    const timeoutLeft = ownChain.timeout > 0 ? Math.max(0, ownChain.timeout - elapsed) : 0;
+    const active = ownChain.current > 0 && timeoutLeft > 0;
+    const nextHit = active ? ownChain.current + 1 : 1;
+    return {
+      active,
+      current: active ? ownChain.current : 0,
+      timeoutLeft,
+      nextHit,
+      bonusNext: active && isChainBonusHit(nextHit),
+      staleSec: elapsed,
+    };
+  }
+
+  function normalizeAttack(attack) {
+    const id = Number(attack?.id);
+    const started = Number(attack?.started);
+    const endedRaw = Number(attack?.ended);
+    const defenderId = Number(attack?.defender?.id);
+    if (!Number.isFinite(id) || id <= 0 || !Number.isFinite(defenderId) || defenderId <= 0) return null;
+    const ff = Number(attack?.modifiers?.fair_fight);
+    const warMod = Number(attack?.modifiers?.war);
+    const chainRaw = attack?.chain;
+    const chain = chainRaw === null || chainRaw === undefined ? null : Number(chainRaw);
+    const respect = Number(attack?.respect_gain);
+    const defenderLevel = Number(attack?.defender?.level);
+    const defenderFactionId = Number(attack?.defender?.faction?.id);
+    return {
+      id,
+      started: Number.isFinite(started) && started > 0 ? started : 0,
+      ended: Number.isFinite(endedRaw) && endedRaw > 0 ? endedRaw : (Number.isFinite(started) ? started : 0),
+      defenderId,
+      defenderFactionId: Number.isFinite(defenderFactionId) && defenderFactionId > 0 ? defenderFactionId : null,
+      defenderLevel: Number.isFinite(defenderLevel) && defenderLevel > 0 ? defenderLevel : null,
+      result: String(attack?.result || ''),
+      outcome: classifyAttackResult(attack?.result),
+      respect: Number.isFinite(respect) && respect >= 0 ? respect : null,
+      ff: Number.isFinite(ff) && ff > 0 ? ff : null,
+      warMod: Number.isFinite(warMod) && warMod > 0 ? warMod : null,
+      chain: Number.isFinite(chain) && chain > 0 ? chain : null,
+      isRankedWar: Boolean(attack?.is_ranked_war),
+      isInterrupted: Boolean(attack?.is_interrupted),
+    };
+  }
+
+  function recordAttackIntel(attack) {
+    if (!attack || processedAttackIds.has(attack.id)) {
+      incStat('intelAttacksSkipped');
+      return false;
+    }
+    processedAttackIds.add(attack.id);
+
+    const key = String(attack.defenderId);
+    const existing = opponentIntel.opponents[key];
+    const record = existing && typeof existing === 'object'
+      ? existing
+      : { u: 0, w: 0, l: 0, n: 0, rw: 0, r: [], ff: null, ffAt: 0, bss: null, bssAt: 0, bssCap: false, lvl: null };
+    if (!Array.isArray(record.r)) record.r = [];
+
+    const nowMs = Date.now();
+    const kind = attack.outcome.kind;
+    if (kind === 'win') record.w = (Number(record.w) || 0) + 1;
+    else if (kind === 'loss') record.l = (Number(record.l) || 0) + 1;
+    else record.n = (Number(record.n) || 0) + 1;
+    if (attack.isRankedWar) record.rw = (Number(record.rw) || 0) + 1;
+    record.u = nowMs;
+    if (attack.defenderLevel) record.lvl = attack.defenderLevel;
+
+    if (attack.ff !== null && attack.ended > 0) {
+      if (!record.ffAt || attack.ended >= Number(record.ffAt)) {
+        record.ff = attack.ff;
+        record.ffAt = attack.ended;
+      }
+      const ownBss = getOwnBss();
+      const ageMs = nowMs - attack.ended * 1000;
+      if (ownBss && ageMs <= INTEL_FF_MAX_AGE_MS && (!record.bssAt || attack.ended >= Number(record.bssAt))) {
+        const estimate = defenderScoreFromFairFight(attack.ff, ownBss);
+        if (estimate !== null) {
+          record.bss = estimate;
+          record.bssAt = attack.ended;
+          record.bssCap = attack.ff >= FAIR_FIGHT_CAP - 1e-9;
+        }
+      }
+    }
+
+    record.r.push({ t: attack.ended, k: kind, s: attack.respect, f: attack.ff, c: attack.chain, w: attack.warMod, rw: attack.isRankedWar ? 1 : 0 });
+    record.r.sort((a, b) => Number(b?.t || 0) - Number(a?.t || 0));
+    if (record.r.length > INTEL_RECENT_SAMPLES) record.r.length = INTEL_RECENT_SAMPLES;
+
+    opponentIntel.opponents[key] = record;
+    incStat('intelAttacksProcessed');
+    scheduleOpponentIntelSave();
+    return true;
+  }
+
+  function getOpponentIntel(userId) {
+    const record = opponentIntel.opponents?.[String(userId)] || null;
+    const level = getBestLevelForUser(userId);
+    return deriveOpponentIntel(record, {
+      level: Number.isFinite(level) ? level : null,
+      ownBss: getOwnBss(),
+      chainSnapshot: getChainSnapshot(),
+      nowMs: Date.now(),
+    });
+  }
+
+  // Pure derivation so the model can be self-tested without touching the persistent store.
+  function deriveOpponentIntel(record, { level = null, ownBss = null, chainSnapshot = null, nowMs = Date.now() } = {}) {
+    const samples = (Array.isArray(record?.r) ? record.r : [])
+      .filter(sample => sample && Number.isFinite(Number(sample.t)) && nowMs - Number(sample.t) * 1000 <= INTEL_SAMPLE_MAX_AGE_MS);
+    const decisive = samples.filter(sample => sample.k === 'win' || sample.k === 'loss');
+    const wins = decisive.filter(sample => sample.k === 'win').length;
+    const losses = decisive.length - wins;
+    const lifetimeWins = Number(record?.w) || 0;
+    const lifetimeLosses = Number(record?.l) || 0;
+
+    // Expected Fair Fight today: prefer the re-projected score model, fall back to the last raw observation.
+    let ff = null;
+    let ffSource = 'none';
+    let ffCapped = false;
+    if (record?.bss && ownBss) {
+      ff = fairFightFromScores(record.bss, ownBss);
+      ffSource = 'model';
+      ffCapped = Boolean(record.bssCap);
+    } else if (Number.isFinite(Number(record?.ff)) && record.ffAt && nowMs - Number(record.ffAt) * 1000 <= INTEL_FF_MAX_AGE_MS) {
+      ff = Number(record.ff);
+      ffSource = 'observed';
+      ffCapped = ff >= FAIR_FIGHT_CAP - 1e-9;
+    }
+    if (ff !== null && ffCapped) ff = FAIR_FIGHT_CAP; // A capped observation is only a lower bound on opponent strength.
+
+    // Smoothed personal win probability. The prior leans on Fair Fight: a capped FF means the opponent is at least 75% of our score.
+    const priorMean = ff === null ? 0.6 : ffCapped ? 0.45 : ff >= 2.5 ? 0.7 : 0.88;
+    const priorWeight = 2;
+    const winProb = (wins + priorWeight * priorMean) / (decisive.length + priorWeight);
+
+    // CHANGED = the two latest fights are losses but the history *before* them was reliably won.
+    const lastTwoLosses = decisive.length >= 2 && decisive[0].k === 'loss' && decisive[1].k === 'loss';
+    const priorLosses = Math.max(0, lifetimeLosses - (lastTwoLosses ? 2 : 0));
+    const priorTotal = lifetimeWins + priorLosses;
+    const historicalRate = priorTotal > 0 ? lifetimeWins / priorTotal : null;
+    let label = 'UNKNOWN';
+    if (lastTwoLosses && priorTotal >= 3 && historicalRate >= 0.75) label = 'CHANGED';
+    else if (decisive.length > 0 && (decisive[0].k === 'loss' || losses * 3 > wins)) label = 'RISK';
+    else if (decisive.length >= 3 && losses === 0) label = 'PROVEN';
+    else if (wins >= 1) label = 'LIKELY';
+    else if (ff !== null) label = ffCapped ? 'RISK' : ff <= 2.5 ? 'LIKELY' : 'UNKNOWN';
+
+    // Expected ranked-war score for a Leave/Hospitalize hit at the next chain position.
+    const base = baseRespectForLevel(Number.isFinite(Number(level)) && Number(level) > 0 ? Number(level) : record?.lvl);
+    const nextHit = chainSnapshot?.nextHit || 1;
+    const chainScale = chainScaleForHit(nextHit);
+    let expectedScore = null;
+    let scoreSource = 'none';
+    if (base !== null && ff !== null) {
+      expectedScore = base * WAR_RESPECT_MULTIPLIER * ff * chainScale;
+      scoreSource = 'model';
+    } else {
+      const observed = samples
+        .filter(sample => sample.k === 'win' && sample.rw && Number.isFinite(Number(sample.s)) && Number(sample.s) > 0)
+        .map(sample => Number(sample.s))
+        .sort((a, b) => a - b);
+      if (observed.length > 0) {
+        expectedScore = observed[Math.floor(observed.length / 2)];
+        scoreSource = 'observed';
+      }
+    }
+    const ev = expectedScore !== null ? winProb * expectedScore : null;
+
+    return {
+      hasRecord: Boolean(record),
+      samples: decisive.length,
+      wins,
+      losses,
+      lifetimeWins,
+      lifetimeLosses,
+      lastResultAt: decisive.length > 0 ? Number(decisive[0].t) : null,
+      ff,
+      ffSource,
+      ffCapped,
+      winProb,
+      label,
+      expectedScore,
+      scoreSource,
+      ev,
+      chainScale,
+      nextHit,
+      ownBssKnown: Boolean(ownBss),
+      ffLabel: ff === null ? '' : ffCapped ? 'FF3.0+' : `FF${ff.toFixed(2)}`,
+      evLabel: ev === null ? '' : `EV${ev.toFixed(1)}`,
+    };
+  }
+
+  function computeBestTarget() {
+    const previous = bestTargetUserId;
+    bestTargetUserId = null;
+    bestTargetReason = '';
+    if (!intelEnabled() || attackHistoryFeatureState === 'unsupported' || !isLiveStatusTrusted()) {
+      return { changed: previous !== null, previous, current: null };
+    }
+    const chainSnapshot = getChainSnapshot();
+    const bonusNext = Boolean(chainSnapshot?.bonusNext);
+    let best = null;
+    for (const userId of rowsByUser.keys()) {
+      const target = getTargetState(userId);
+      if (!target.ideal) continue;
+      const intel = getOpponentIntel(userId);
+      if (intel.ev === null || !(intel.label === 'PROVEN' || intel.label === 'LIKELY')) continue;
+      // During a bonus hit the priority is securing it, so rank by win confidence first.
+      const rank = bonusNext ? [intel.winProb, intel.ev] : [intel.ev, intel.winProb];
+      const better = !best
+        || rank[0] > best.rank[0] + 1e-9
+        || (Math.abs(rank[0] - best.rank[0]) <= 1e-9 && rank[1] > best.rank[1]);
+      if (better) best = { userId, rank, intel };
+    }
+    if (best) {
+      bestTargetUserId = best.userId;
+      bestTargetReason = bonusNext
+        ? `chain bonus hit #${chainSnapshot.nextHit} is next: safest proven green target`
+        : 'highest expected ranked-war score per 25 energy among green targets';
+      if (previous !== best.userId) incStat('bestRecommendations');
+    }
+    return { changed: previous !== bestTargetUserId, previous, current: bestTargetUserId };
+  }
+
+  function ensureIntelBadge(memberDiv, userId) {
+    if (!memberDiv) return null;
+    const marker = String(userId);
+    const container = ensureMemberMetaContainer(memberDiv, userId);
+    let badge = container?.querySelector(`span[data-two-intel="${marker}"]`);
+    if (badge) return badge;
+
+    badge = document.createElement('span');
+    badge.dataset.twoIntel = marker;
+    badge.className = 'two-intel-badge';
+    badge.hidden = true;
+    badge.title = 'Personal intel';
+    container?.appendChild(badge);
+    return badge;
+  }
+
+  function describeIntel(intel, userId) {
+    const lines = [];
+    if (bestTargetUserId === userId) lines.push(`BEST: ${bestTargetReason}`);
+    lines.push(`Confidence: ${intel.label}`);
+    if (intel.samples > 0) {
+      lines.push(`Recent record: ${intel.wins}-${intel.losses} (${intel.samples} decisive fights in the last 180 days${intel.lastResultAt ? `, last ${formatRelativeAgeFromNow(intel.lastResultAt)}` : ''})`);
+    } else {
+      lines.push('No decisive personal fights recorded yet');
+    }
+    if (intel.lifetimeWins + intel.lifetimeLosses > intel.samples) lines.push(`Lifetime record: ${intel.lifetimeWins}-${intel.lifetimeLosses}`);
+    if (intel.ff !== null) {
+      lines.push(intel.ffCapped
+        ? 'Fair Fight: 3.00 (capped: opponent is at least 75% of your battle-stat score)'
+        : `Fair Fight: ${intel.ff.toFixed(2)} (${intel.ffSource === 'model' ? 'projected from an observed fight and your current stats' : 'last observed value'})`);
+    } else {
+      lines.push('Fair Fight: unknown until you fight this player once');
+    }
+    lines.push(`Win probability: ${(intel.winProb * 100).toFixed(0)}% (smoothed)`);
+    if (intel.expectedScore !== null) {
+      lines.push(intel.scoreSource === 'model'
+        ? `Expected score if you win: ${intel.expectedScore.toFixed(2)} (level base x2 war x FF x chain scale ${intel.chainScale.toFixed(2)} at hit #${intel.nextHit})`
+        : `Expected score if you win: ${intel.expectedScore.toFixed(2)} (median of your ranked-war wins vs this player)`);
+      lines.push(`Expected value per 25 energy: ${intel.ev.toFixed(2)}`);
+    }
+    if (!intel.ownBssKnown) lines.push('Own battle stats unavailable to this key; Fair Fight cannot be re-projected as your stats grow');
+    return lines.join(' | ');
+  }
+
+  function renderIntelBadge(badge, userId, target) {
+    if (!badge) return;
+    const enabled = intelEnabled() && attackHistoryFeatureState !== 'unsupported';
+    const intel = enabled ? getOpponentIntel(userId) : null;
+    const isBest = enabled && bestTargetUserId === userId;
+    const text = !intel ? '' : isBest
+      ? `★ ${intel.evLabel || intel.ffLabel}`
+      : intel.evLabel || intel.ffLabel || (intel.label !== 'UNKNOWN' ? intel.label : '');
+    const signature = `${text}|${intel?.label || ''}|${intel ? `${intel.wins}-${intel.losses}:${intel.nextHit}:${intel.ffSource}` : ''}|${isBest ? 1 : 0}|${target?.ideal ? 1 : 0}|${target?.good ? 1 : 0}`;
+    if (badge.dataset.twoSignature === signature) return;
+    badge.dataset.twoSignature = signature;
+    badge.hidden = text === '';
+    badge.textContent = text;
+    badge.className = `two-intel-badge two-intel-${String(intel?.label || 'unknown').toLowerCase()}${isBest ? ' two-intel-best' : ''}`;
+    badge.title = intel ? describeIntel(intel, userId) : 'Personal intel';
+  }
+
 
   function ensureTargetToolbar(list) {
     if (!list) return null;
@@ -1162,12 +1676,22 @@
     historyKeyButton.className = 'two-history-key-btn';
     historyKeyButton.textContent = 'HIST KEY';
     historyKeyButton.hidden = true;
-    historyKeyButton.title = 'Recent attack dots need a Limited or Custom user -> attacksfull key';
+    historyKeyButton.title = 'Personal intel (attack dots, Fair Fight memory, expected score) needs a Limited or Custom user -> attacks key';
     historyKeyButton.addEventListener('click', event => {
       event.preventDefault();
       event.stopPropagation();
       setAttackApiKey();
     });
+
+    const warChip = document.createElement('span');
+    warChip.className = 'two-context-chip two-war-chip';
+    warChip.hidden = true;
+    warChip.title = 'Ranked war score';
+
+    const chainChip = document.createElement('span');
+    chainChip.className = 'two-context-chip two-chain-chip';
+    chainChip.hidden = true;
+    chainChip.title = 'Your faction chain';
 
     const sync = document.createElement('span');
     sync.className = 'two-sync-indicator two-syncing';
@@ -1200,9 +1724,11 @@
 
     const right = document.createElement('div');
     right.className = 'two-toolbar-right';
-    right.append(historyKeyButton, sync, counter);
+    right.append(historyKeyButton, warChip, chainChip, sync, counter);
     toolbar.append(modeGroup, right);
 
+    toolbar.__twoWarChip = warChip;
+    toolbar.__twoChainChip = chainChip;
     toolbar.__twoAllButton = allButton;
     toolbar.__twoTargetButton = targetButton;
     toolbar.__twoSettingsButton = settingsButton;
@@ -1260,8 +1786,8 @@
     const status = effective.status;
     const apiStatus = statusByUser.get(userId);
     const activityInfo = getActivityInfo(userId);
-    const rawUntil = Number(apiStatus?.until);
-    const secondsLeft = Number.isFinite(rawUntil) ? Math.ceil(rawUntil - serverNowSec()) : null;
+    const rawUntil = getStatusUntil(apiStatus);
+    const secondsLeft = rawUntil !== null ? Math.ceil(rawUntil - serverNowSec()) : null;
 
     const hasActivityData = ['online', 'idle', 'offline'].includes(activityInfo.status);
     const activityEligible = hasActivityData && (activityInfo.status === 'offline' || (allowIdleTargets() && activityInfo.status === 'idle'));
@@ -1397,6 +1923,9 @@
       const historyKeyButton = toolbar.__twoHistoryKeyButton;
       if (historyKeyButton) historyKeyButton.hidden = attackHistoryFeatureState !== 'unsupported';
 
+      renderWarChip(toolbar.__twoWarChip);
+      renderChainChip(toolbar.__twoChainChip);
+
       const sync = toolbar.__twoSync;
       sync.textContent = indicator.text;
       sync.className = `two-sync-indicator ${indicator.className}`;
@@ -1405,14 +1934,92 @@
     }
   }
 
+  function formatClock(seconds) {
+    const value = Math.max(0, Math.floor(Number(seconds) || 0));
+    const minutes = Math.floor(value / 60);
+    const rest = value % 60;
+    return `${minutes}:${String(rest).padStart(2, '0')}`;
+  }
+
+  function getWarDecayInfo(war) {
+    const start = Number(war?.start);
+    if (!Number.isFinite(start) || start <= 0) return null;
+    const now = serverNowSec();
+    const decayStartsAt = start + 24 * 3600;
+    if (now < decayStartsAt) return { started: false, nextAt: decayStartsAt, secondsToNext: decayStartsAt - now };
+    const hoursElapsed = Math.floor((now - decayStartsAt) / 3600);
+    const nextAt = decayStartsAt + (hoursElapsed + 1) * 3600;
+    return { started: true, nextAt, secondsToNext: nextAt - now };
+  }
+
+  function renderWarChip(chip) {
+    if (!chip) return;
+    const war = currentWar;
+    if (!intelEnabled() || !war || !Number.isFinite(Number(war.target)) || !Number.isFinite(Number(war.ownScore)) || !Number.isFinite(Number(war.enemyScore))) {
+      if (!chip.hidden) chip.hidden = true;
+      return;
+    }
+    const lead = Number(war.ownScore) - Number(war.enemyScore);
+    const target = Number(war.target);
+    const text = `WAR ${lead >= 0 ? '+' : ''}${lead} / ${target}`;
+    const decay = getWarDecayInfo(war);
+    const ageSec = Number.isFinite(Number(war.fetchedAtPerf)) ? Math.max(0, Math.floor((monotonicNowMs() - Number(war.fetchedAtPerf)) / 1000)) : null;
+    const remaining = Math.max(0, target - lead);
+    const signature = `${text}|${decay?.started ? 1 : 0}|${Math.floor((decay?.secondsToNext || 0) / 60)}|${ageSec === null ? '' : Math.floor(ageSec / 30)}`;
+    if (chip.dataset.twoSignature !== signature) {
+      chip.dataset.twoSignature = signature;
+      chip.hidden = false;
+      chip.textContent = text;
+      chip.classList.toggle('two-chip-positive', lead > 0);
+      chip.classList.toggle('two-chip-negative', lead < 0);
+      const lines = [
+        `Ranked war: ${war.ownName || 'us'} ${war.ownScore} vs ${war.enemyName || 'them'} ${war.enemyScore}`,
+        `Lead ${lead >= 0 ? '+' : ''}${lead}; target ${target}; ${lead >= target ? 'target reached' : `${remaining} more needed`}`,
+      ];
+      if (decay) {
+        lines.push(decay.started
+          ? `Target decays 1% of the original per hour; next reduction in ${formatClock(decay.secondsToNext)}`
+          : `Target decay starts 24h after war start (in ${formatDurationCompact(decay.secondsToNext)})`);
+      }
+      if (ageSec !== null) lines.push(`Score refreshed ${ageSec}s ago`);
+      chip.title = lines.join(' | ');
+    }
+  }
+
+  function renderChainChip(chip) {
+    if (!chip) return;
+    const snapshot = intelEnabled() ? getChainSnapshot() : null;
+    if (!snapshot || !snapshot.active) {
+      if (!chip.hidden) chip.hidden = true;
+      return;
+    }
+    const text = snapshot.bonusNext
+      ? `BONUS #${snapshot.nextHit} ${formatClock(snapshot.timeoutLeft)}`
+      : `CHAIN ${snapshot.current} ${formatClock(snapshot.timeoutLeft)}`;
+    const urgent = snapshot.timeoutLeft <= 90;
+    const signature = `${text}|${urgent ? 1 : 0}`;
+    if (chip.dataset.twoSignature === signature) return;
+    chip.dataset.twoSignature = signature;
+    chip.hidden = false;
+    chip.textContent = text;
+    chip.classList.toggle('two-chip-bonus', snapshot.bonusNext);
+    chip.classList.toggle('two-chip-urgent', urgent);
+    chip.title = snapshot.bonusNext
+      ? `Your next hit (#${snapshot.nextHit}) is a chain bonus hit. It must land on an enemy to count for the war; BEST switches to the safest proven target. ${formatClock(snapshot.timeoutLeft)} left on the chain timer.`
+      : `Your faction chain is at ${snapshot.current} with ${formatClock(snapshot.timeoutLeft)} left. Next hit scales respect by x${chainScaleForHit(snapshot.nextHit).toFixed(2)}.`;
+  }
+
   function getUserRenderSignature(userId, ageInfo, target, activityInfo, rawStatus) {
     const history = getAttackHistory(userId).slice(0, ATTACK_RESULTS_LIMIT)
       .map(item => `${item.kind}:${item.result}:${item.ended}:${item.id}`)
       .join(',');
-    const until = Number(rawStatus?.until);
-    const hospitalSecond = Number.isFinite(until) ? Math.ceil(until - serverNowSec()) : '';
+    const until = getStatusUntil(rawStatus);
+    const hospitalSecond = until !== null ? Math.ceil(until - serverNowSec()) : '';
+    const intel = intelEnabled() ? getOpponentIntel(userId) : null;
     return [
       filterMode,
+      intel ? `${intel.label}:${intel.evLabel}:${intel.ffLabel}:${intel.wins}-${intel.losses}:${intel.nextHit}` : 'nointel',
+      bestTargetUserId === userId ? 'best' : '',
       configuredMaxAgeYears(),
       configuredGreenHospitalSec(),
       configuredYellowHospitalSec(),
@@ -1450,9 +2057,11 @@
       const ageBadge = item.ageBadge || ensureAgeBadge(item.memberDiv, userId);
       const activityBadge = item.activityBadge || ensureActivityBadge(item.memberDiv, userId);
       const attackHistoryBadge = item.attackHistoryBadge || ensureAttackHistoryBadge(item.memberDiv, userId);
+      const intelBadge = item.intelBadge || ensureIntelBadge(item.memberDiv, userId);
       const hospBadge = item.hospBadge || ensureHospitalBadge(item.statusDiv, userId);
 
       item.li.classList.toggle('two-young-player', target.ageEligible);
+      item.li.classList.toggle('two-best-target', target.ideal && intelEnabled() && bestTargetUserId === userId);
       item.li.classList.toggle('two-ideal-target', target.ideal);
       item.li.classList.toggle('two-good-target', target.good);
       item.li.classList.toggle('two-ideal-soon', target.ideal && (target.leavingHospitalSoon || target.isDue));
@@ -1496,10 +2105,11 @@
       }
 
       if (attackHistoryBadge) renderAttackHistoryBadge(attackHistoryBadge, userId);
+      if (intelBadge) renderIntelBadge(intelBadge, userId, target);
 
       if (!hospBadge) continue;
-      const rawUntil = Number(rawStatus?.until);
-      if (!target.rawIsHospital || target.domConfirmedOkay || !Number.isFinite(rawUntil)) {
+      const rawUntil = getStatusUntil(rawStatus);
+      if (!target.rawIsHospital || target.domConfirmedOkay || rawUntil === null) {
         hospBadge.hidden = true;
         hospBadge.classList.remove('two-soon', 'two-now', 'two-target-window', 'two-watch-window', 'two-due', 'two-volatile');
         continue;
@@ -1538,6 +2148,7 @@
     renderFrame = null;
     if (!fullRenderQueued) return;
     fullRenderQueued = false;
+    computeBestTarget();
     for (const userId of rowsByUser.keys()) renderUser(userId);
     lastRenderedTrustState = isLiveStatusTrusted();
     updateTargetToolbars();
@@ -1577,8 +2188,8 @@
     // Hospital timers can change every second.
     for (const [userId, status] of statusByUser) {
       if (String(status?.state ?? '').toLowerCase() !== 'hospital') continue;
-      const until = Number(status?.until);
-      const seconds = Number.isFinite(until) ? Math.ceil(until - serverNowSec()) : null;
+      const until = getStatusUntil(status);
+      const seconds = until !== null ? Math.ceil(until - serverNowSec()) : null;
       const displaySignature = Number.isFinite(seconds) ? (seconds <= 0 ? 'DUE' : String(seconds)) : '?';
       const signature = `${displaySignature}|${isLiveStatusTrusted() ? 1 : 0}|${getMemberRiskInfo(userId).label}|${getDomOkayOverride(userId) ? 1 : 0}`;
       if (lastHospitalDisplayByUser.get(userId) === signature) continue;
@@ -1592,6 +2203,13 @@
       if (lastActivityDisplayByUser.get(userId) === signature) continue;
       lastActivityDisplayByUser.set(userId, signature);
       renderIds.add(userId);
+    }
+
+    // Hospital timers change green eligibility every second, so the BEST recommendation is re-evaluated here too.
+    const best = computeBestTarget();
+    if (best.changed) {
+      if (best.previous !== null) renderIds.add(best.previous);
+      if (best.current !== null) renderIds.add(best.current);
     }
 
     for (const userId of renderIds) renderUser(userId);
@@ -1792,10 +2410,11 @@
         const ageBadge = ensureAgeBadge(memberDiv, userId);
         const activityBadge = ensureActivityBadge(memberDiv, userId);
         const attackHistoryBadge = ensureAttackHistoryBadge(memberDiv, userId);
+        const intelBadge = ensureIntelBadge(memberDiv, userId);
         const hospBadge = ensureHospitalBadge(statusDiv, userId);
 
         if (!newMap.has(userId)) newMap.set(userId, []);
-        newMap.get(userId).push({ li, list, anchor, memberDiv, statusDiv, level, ageBadge, activityBadge, attackHistoryBadge, hospBadge });
+        newMap.get(userId).push({ li, list, anchor, memberDiv, statusDiv, level, ageBadge, activityBadge, attackHistoryBadge, intelBadge, hospBadge });
       }
     }
 
@@ -1827,7 +2446,9 @@
     const addedUserIds = new Set(Array.from(newMap.keys()).filter(id => !previousIds.has(id)));
     if (addedUserIds.size > 0 && attackHistoryScope) {
       // Backfill the current war/window once for genuinely new faction members, then resume incremental updates.
-      attackHistoryLastEnded = 0;
+      attackHistoryCursor = 0;
+      attackHistoryBackfillTo = null;
+      attackHistoryBackfillDone = false;
       scheduleAttackRefresh(500);
     }
     lastNonEmptyRowsAt = Date.now();
@@ -1856,10 +2477,19 @@
   }
 
   function getBestLevelForUser(userId) {
+    // The faction members payload is authoritative; DOM scraping is only a pre-snapshot fallback.
+    const apiLevel = Number(memberMetaByUser.get(userId)?.level);
+    if (Number.isFinite(apiLevel) && apiLevel > 0) return apiLevel;
     const rows = rowsByUser.get(userId) || [];
     let best = Number.POSITIVE_INFINITY;
     for (const row of rows) best = Math.min(best, Number(row.level));
     return best;
+  }
+
+  // Torn's v2 schema types `status.until` as nullable. Number(null) is 0, which would look like an expired timer.
+  function getStatusUntil(status) {
+    const until = Number(status?.until);
+    return Number.isFinite(until) && until > 0 ? until : null;
   }
 
   function profilePriority(userId) {
@@ -2144,7 +2774,9 @@
       return;
     }
     attackHistoryScope = scope;
-    attackHistoryLastEnded = 0;
+    attackHistoryCursor = 0;
+    attackHistoryBackfillTo = null;
+    attackHistoryBackfillDone = false;
     attackHistoryByUser.clear();
     lastRenderedSignatureByUser.clear();
     if (loadCachedAttackHistory(scope)) renderAll();
@@ -2165,7 +2797,17 @@
       attackHistoryByUser.set(numericId, (Array.isArray(entries) ? entries : []).slice(0, ATTACK_RESULTS_LIMIT));
     }
     pruneAttackHistoryMap(attackHistoryByUser);
-    attackHistoryLastEnded = Number.isFinite(Number(cached.lastEnded)) ? Number(cached.lastEnded) : 0;
+    // A cursor from a previous session is only meaningful if the opponent memory it fed still exists.
+    if (processedAttackIds.size === 0) {
+      attackHistoryCursor = 0;
+      attackHistoryBackfillTo = null;
+      attackHistoryBackfillDone = false;
+      return true;
+    }
+    attackHistoryCursor = Number.isFinite(Number(cached.cursor)) ? Number(cached.cursor) : 0;
+    const backfillTo = Number(cached.backfillTo);
+    attackHistoryBackfillTo = Number.isFinite(backfillTo) && backfillTo > 0 ? backfillTo : null;
+    attackHistoryBackfillDone = Boolean(cached.backfillDone) && attackHistoryCursor > 0 && attackHistoryBackfillTo === null;
     return true;
   }
 
@@ -2181,12 +2823,48 @@
       scopeFrom: Number(scope.from || 0),
       factionId: Number(scope.factionId || 0),
       warId: Number.isFinite(Number(scope.warId)) ? Number(scope.warId) : null,
-      lastEnded: Number(attackHistoryLastEnded || 0),
+      cursor: Number(attackHistoryCursor || 0),
+      backfillTo: attackHistoryBackfillTo,
+      backfillDone: Boolean(attackHistoryBackfillDone),
       entries,
     };
     pruneTimestampedObjectCache(attackHistoryCache);
     saveJson(ATTACK_HISTORY_CACHE_STORAGE, attackHistoryCache);
   }
+
+  // Accepts both the /faction/wars `ranked` object (war_id) and a /faction/warfareranked item (id).
+  // Returns null unless the war is ongoing and involves the enemy faction currently displayed.
+  function normalizeRankedWar(raw, enemyFactionId, nowSec) {
+    if (!raw || typeof raw !== 'object') return null;
+    const id = Number(raw.war_id ?? raw.id);
+    const start = Number(raw.start);
+    const end = raw.end === null || raw.end === undefined ? null : Number(raw.end);
+    const winner = raw.winner === null || raw.winner === undefined ? null : Number(raw.winner);
+    const factions = Array.isArray(raw.factions) ? raw.factions : [];
+    const enemy = factions.find(item => Number(item?.id) === Number(enemyFactionId)) || null;
+    if (!enemy || !Number.isFinite(id) || id <= 0 || !Number.isFinite(start) || start <= 0) return null;
+    const own = factions.find(item => ownFactionId ? Number(item?.id) === Number(ownFactionId) : Number(item?.id) !== Number(enemyFactionId)) || null;
+    if (ownFactionId && !own) return null;
+    const ongoing = winner === null && (end === null || !Number.isFinite(end) || end <= 0 || end >= nowSec - 120);
+    if (!ongoing || start > nowSec + 120) return null;
+    const target = Number(raw.target);
+    return {
+      id,
+      start,
+      end: Number.isFinite(end) ? end : null,
+      target: Number.isFinite(target) && target > 0 ? target : null,
+      winner,
+      ownScore: Number.isFinite(Number(own?.score)) ? Number(own.score) : null,
+      enemyScore: Number.isFinite(Number(enemy?.score)) ? Number(enemy.score) : null,
+      ownChain: Number(own?.chain) || 0,
+      enemyChain: Number(enemy?.chain) || 0,
+      ownName: typeof own?.name === 'string' ? own.name : '',
+      enemyName: typeof enemy?.name === 'string' ? enemy.name : '',
+      fetchedAtPerf: monotonicNowMs(),
+    };
+  }
+
+  let warfareRankedFallbackNeeded = false;
 
   async function refreshWarContext(factionId, { force = false } = {}) {
     factionId = Number(factionId);
@@ -2199,40 +2877,50 @@
       try {
         try { await ensurePrimaryKeyInfo(); } catch { /* war lookup can still proceed without own faction id */ }
         const nowSec = Math.floor(serverNowSec());
-        const data = await apiGet('/faction/warfareranked', {
-          query: {
-            sort: 'DESC',
-            limit: 100,
-            from: Math.max(0, nowSec - 7 * 24 * 60 * 60),
-          },
-          cacheBust: force || warContextState === 'unknown',
-        });
-        if (activeFactionId !== factionId) return null;
-        const wars = Array.isArray(data?.warfareranked) ? data.warfareranked : [];
-        const candidates = wars.filter(war => {
-          const factions = Array.isArray(war?.factions) ? war.factions.map(item => Number(item?.id)) : [];
-          if (!factions.includes(factionId)) return false;
-          if (ownFactionId && !factions.includes(Number(ownFactionId))) return false;
-          const winner = war?.winner;
-          const start = Number(war?.start || 0);
-          const end = Number(war?.end || 0);
-          const ongoing = winner === null || winner === undefined;
-          const timeCompatible = start <= nowSec + 120 && (end <= 0 || end >= nowSec - 120 || ongoing);
-          return ongoing && timeCompatible;
-        }).sort((a, b) => Number(b?.start || 0) - Number(a?.start || 0));
+        let war = null;
+        try {
+          // /faction/wars is the live source: it returns only the key owner's current ranked war with score, target and chains.
+          const data = await apiGet('/faction/wars', { cacheBust: true });
+          if (activeFactionId !== factionId) return null;
+          war = normalizeRankedWar(data?.wars?.ranked, factionId, nowSec);
+          warfareRankedFallbackNeeded = false;
+        } catch (err) {
+          if (activeFactionId !== factionId) return null;
+          if (err?.message === 'API backoff active.') throw err;
+          warfareRankedFallbackNeeded = true;
+          console.warn(`[${SCRIPT}] /faction/wars unavailable; trying the warfare list.`, err);
+        }
+        if (!war && warfareRankedFallbackNeeded) {
+          const data = await apiGet('/faction/warfareranked', {
+            query: { sort: 'DESC', limit: 100, from: Math.max(0, nowSec - 7 * 24 * 60 * 60) },
+            cacheBust: force || warContextState === 'unknown',
+          });
+          if (activeFactionId !== factionId) return null;
+          const wars = Array.isArray(data?.warfareranked) ? data.warfareranked : [];
+          const candidates = wars
+            .map(item => normalizeRankedWar(item, factionId, nowSec))
+            .filter(Boolean)
+            .sort((a, b) => Number(b.start || 0) - Number(a.start || 0));
+          war = candidates[0] || null;
+        }
 
-        currentWar = candidates[0] || null;
+        currentWar = war;
         warContextState = currentWar ? 'ready' : 'fallback';
         warContextLastCheckedAt = Date.now();
         setAttackHistoryScope(currentWar ? makeWarAttackScope(factionId, currentWar) : makeFallbackAttackScope(factionId));
+        updateTargetToolbars();
         return currentWar;
       } catch (err) {
         if (activeFactionId !== factionId) return null;
-        warContextState = 'fallback';
         warContextLastCheckedAt = Date.now();
+        if (currentWar && (err?.retryable || err?.message === 'API backoff active.')) {
+          // A transient failure must not flip the scope: that would wipe the dots and restart the backfill for nothing.
+          return currentWar;
+        }
+        warContextState = 'fallback';
         currentWar = null;
         setAttackHistoryScope(makeFallbackAttackScope(factionId));
-        console.warn(`[${SCRIPT}] Ranked-war context unavailable; using a time-scoped attack-history fallback.`, err);
+        if (err?.message !== 'API backoff active.') console.warn(`[${SCRIPT}] Ranked-war context unavailable; using a time-scoped attack-history fallback.`, err);
         return null;
       }
     })().finally(() => {
@@ -2257,31 +2945,42 @@
     }, Math.max(500, delayMs));
   }
 
-  function mergeRecentAttacks(attacks, { reset = false } = {}) {
+  function mergeRecentAttacks(rawAttacks) {
     const visibleIds = new Set(rowsByUser.keys());
-    if (reset) attackHistoryByUser.clear();
-    if (visibleIds.size === 0) return;
+    const scope = attackHistoryScope;
+    let dotsChanged = 0;
+    let maxStarted = 0;
 
-    for (const attack of Array.isArray(attacks) ? attacks : []) {
-      const ended = Number(attack?.ended || attack?.started || 0);
-      // Advance the incremental cursor even for unrelated outgoing attacks so the same data is not downloaded repeatedly.
-      if (Number.isFinite(ended)) attackHistoryLastEnded = Math.max(attackHistoryLastEnded, ended);
-      const defenderId = Number(attack?.defender?.id);
-      if (!Number.isFinite(defenderId) || !visibleIds.has(defenderId)) continue;
-      const outcome = classifyAttackResult(attack?.result);
-      const current = attackHistoryByUser.get(defenderId) || [];
+    for (const raw of Array.isArray(rawAttacks) ? rawAttacks : []) {
+      const attack = normalizeAttack(raw);
+      if (!attack) continue;
+      maxStarted = Math.max(maxStarted, attack.started);
+
+      // Long-term personal matchup memory is scoped to the opponent, not to the current war or page.
+      if (intelEnabled()) recordAttackIntel(attack);
+
+      if (!visibleIds.has(attack.defenderId)) continue;
+      if (scope?.mode === 'war' && !attack.isRankedWar) continue;
+      if (scope && attack.ended < Number(scope.from || 0)) continue;
+      const current = attackHistoryByUser.get(attack.defenderId) || [];
+      if (current.some(entry => Number(entry?.id) === attack.id)) continue;
       current.push({
-        kind: outcome.kind,
-        short: outcome.short,
-        title: outcome.title,
-        result: String(attack?.result || ''),
-        ended,
-        id: Number(attack?.id || 0),
+        kind: attack.outcome.kind,
+        title: attack.outcome.title,
+        result: attack.result,
+        ended: attack.ended,
+        id: attack.id,
+        respect: attack.respect,
+        ff: attack.ff,
       });
-      attackHistoryByUser.set(defenderId, current);
+      attackHistoryByUser.set(attack.defenderId, current);
+      dotsChanged += 1;
     }
-    pruneAttackHistoryMap(attackHistoryByUser);
-    persistAttackHistory();
+
+    // Advance the incremental cursor on every outgoing attack so unrelated hits are not downloaded repeatedly.
+    if (maxStarted > attackHistoryCursor) attackHistoryCursor = maxStarted;
+    if (dotsChanged > 0) pruneAttackHistoryMap(attackHistoryByUser);
+    return dotsChanged;
   }
 
   async function refreshRecentAttacks() {
@@ -2296,6 +2995,8 @@
     }
 
     const factionId = activeFactionId;
+    const generation = lifecycleGeneration;
+    let aborted = false;
     const flight = (async () => {
       try {
         const capable = await ensureAttackHistoryCapability();
@@ -2304,39 +3005,91 @@
           renderAll();
           return;
         }
+        if (generation !== lifecycleGeneration) { aborted = true; return; }
         await refreshWarContext(factionId);
         if (activeFactionId !== factionId) return;
+        if (generation !== lifecycleGeneration) { aborted = true; return; }
         if (!attackHistoryScope) setAttackHistoryScope(makeFallbackAttackScope(factionId));
+        // Own battle stats turn observed Fair Fight into today's expected score. Cached for hours; one request.
+        await refreshSelfStats();
+        if (activeFactionId !== factionId) return;
+        if (generation !== lifecycleGeneration || !isActiveView()) { aborted = true; return; }
 
         const requestScopeKey = attackHistoryScope?.key || null;
         const baseFrom = Number(attackHistoryScope?.from || 0);
-        const incrementalFrom = attackHistoryLastEnded > 0
-          ? Math.max(baseFrom, attackHistoryLastEnded - 2)
-          : baseFrom;
-        const reset = attackHistoryLastEnded <= 0 && attackHistoryByUser.size === 0;
-        const data = await apiGet('/user/attacksfull', {
-          query: {
-            filters: 'outgoing',
-            sort: 'DESC',
-            limit: ATTACKS_FETCH_LIMIT,
-            from: Math.max(0, Math.floor(incrementalFrom)),
-          },
-          cacheBust: true,
-          keyOverride: attackApiKey || null,
-        });
-        if (activeFactionId !== factionId) return;
-        if ((attackHistoryScope?.key || null) !== requestScopeKey) return;
-        const attacks = Array.isArray(data?.attacks) ? data.attacks : [];
+        let budget = ATTACKS_PAGES_PER_CYCLE;
+
+        // /user/attacks pages are capped at 100 rows and arrive newest first. One page is fetched with `from` and
+        // older pages are reached by walking `to` backwards. Returns the oldest `started` on the page, or null when
+        // the page was short (nothing older remains in the requested range) or the flight must abort.
+        const fetchPage = async (from, to) => {
+          const data = await apiGet('/user/attacks', {
+            query: {
+              filters: 'outgoing',
+              sort: 'DESC',
+              limit: ATTACKS_PAGE_LIMIT,
+              from: Math.max(0, Math.floor(from)),
+              ...(to !== null ? { to: Math.floor(to) } : {}),
+            },
+            cacheBust: true,
+            keyOverride: attackApiKey || null,
+          });
+          budget -= 1;
+          if (activeFactionId !== factionId || generation !== lifecycleGeneration || !isActiveView()) return { aborted: true };
+          if ((attackHistoryScope?.key || null) !== requestScopeKey) return { aborted: true };
+          const attacks = Array.isArray(data?.attacks) ? data.attacks : [];
+          mergeRecentAttacks(attacks);
+          if (attacks.length < ATTACKS_PAGE_LIMIT) return { aborted: false, older: null };
+          const minStarted = attacks.reduce((min, item) => {
+            const started = Number(item?.started);
+            return Number.isFinite(started) && started > 0 ? Math.min(min, started) : min;
+          }, Number.POSITIVE_INFINITY);
+          // `to` is inclusive, so the boundary attack repeats (deduplicated by id). No progress means the range is exhausted.
+          if (!Number.isFinite(minStarted) || (to !== null && minStarted >= to)) return { aborted: false, older: null };
+          return { aborted: false, older: minStarted };
+        };
+
+        // Phase 1: the head of the window (everything since the cursor). On the very first fetch this is the whole window.
+        const headFrom = attackHistoryCursor > 0 ? Math.max(baseFrom, attackHistoryCursor - ATTACK_CURSOR_OVERLAP_SEC) : baseFrom;
+        let headTo = null;
+        let headComplete = false;
+        while (budget > 0) {
+          const page = await fetchPage(headFrom, headTo);
+          if (page.aborted) { aborted = true; return; }
+          if (page.older === null) { headComplete = true; break; }
+          headTo = page.older;
+        }
+        if (!headComplete && headTo !== null) {
+          // More history exists below headTo. Restart the backfill pointer from there; any overlap with an earlier
+          // partial backfill is harmless because every attack is deduplicated by id.
+          attackHistoryBackfillTo = headTo;
+          attackHistoryBackfillDone = false;
+        } else if (attackHistoryBackfillTo === null) {
+          attackHistoryBackfillDone = true;
+        }
+
+        // Phase 2: continue an unfinished backfill downwards to the scope start, within the remaining page budget.
+        while (attackHistoryBackfillTo !== null && budget > 0) {
+          const page = await fetchPage(baseFrom, attackHistoryBackfillTo);
+          if (page.aborted) { aborted = true; return; }
+          if (page.older === null || page.older >= attackHistoryBackfillTo) {
+            attackHistoryBackfillTo = null;
+            attackHistoryBackfillDone = true;
+            break;
+          }
+          attackHistoryBackfillTo = page.older;
+        }
+
         incStat('attackHistoryRefreshes');
-        mergeRecentAttacks(attacks, { reset });
         attackHistoryFeatureState = 'ready';
+        persistAttackHistory();
         renderAll();
       } catch (err) {
         if (activeFactionId !== factionId) return;
         if (Number(err?.code) === 16 || Number(err?.code) === 7) {
           attackHistoryFeatureState = 'unsupported';
           attackHistoryByUser.clear();
-          console.warn(`[${SCRIPT}] Recent attack-result dots need a Limited key or Custom user -> attacksfull key. Main overlay remains active.`, err);
+          console.warn(`[${SCRIPT}] Personal intel needs a Limited key or Custom user -> attacks key. Main overlay remains active.`, err);
           renderAll();
           return;
         }
@@ -2348,13 +3101,14 @@
         }
         attackHistoryFeatureState = 'unsupported';
         attackHistoryByUser.clear();
-        console.warn(`[${SCRIPT}] Recent attack-result dots disabled for this key.`, err);
+        console.warn(`[${SCRIPT}] Personal intel disabled for this key.`, err);
         renderAll();
       }
     })().finally(() => {
       if (attackRefreshInFlight === flight) attackRefreshInFlight = null;
       if (activeFactionId === factionId && isActiveView() && apiKey && attackHistoryFeatureState !== 'unsupported') {
-        scheduleAttackRefresh();
+        // An unfinished backfill or a lifecycle-aborted flight continues quickly; steady state polls every 30 s.
+        scheduleAttackRefresh(aborted || attackHistoryBackfillTo !== null ? 1_500 : ATTACKS_REFRESH_MS);
       }
     });
 
@@ -2373,10 +3127,13 @@
       if (!Number.isFinite(id)) continue;
       if (member?.status) statusByUser.set(id, member.status);
       if (member?.last_action) lastActionByUser.set(id, member.last_action);
+      const level = Number(member?.level);
       memberMetaByUser.set(id, {
         hasEarlyDischarge: Boolean(member?.has_early_discharge),
         isRevivable: Boolean(member?.is_revivable),
         reviveSetting: String(member?.revive_setting || 'Unknown'),
+        level: Number.isFinite(level) && level > 0 ? level : null,
+        name: '',
       });
     }
 
@@ -2402,7 +3159,11 @@
     warContextLastCheckedAt = 0;
     warContextInFlight = null;
     attackHistoryScope = null;
-    attackHistoryLastEnded = 0;
+    attackHistoryCursor = 0;
+    attackHistoryBackfillTo = null;
+    attackHistoryBackfillDone = false;
+    bestTargetUserId = null;
+    bestTargetReason = '';
 
     hotProfileQueue.length = 0;
     coldProfileQueue.length = 0;
@@ -2480,7 +3241,9 @@
     }
 
     clearFactionRefreshTimer();
+    clearAttackRefreshTimer();
     factionRefreshInFlight = null; // Detach any request belonging to the previous faction; its response is faction-id guarded.
+    attackRefreshInFlight = null; // Same for a paginated attack flight, which can span several requests.
     activeFactionId = factionId;
     resetFactionState();
     restoreCachedFactionStatuses(factionId);
@@ -2560,10 +3323,13 @@
           if (!Number.isFinite(id)) continue;
           if (member?.status) statusByUser.set(id, member.status);
           if (member?.last_action) lastActionByUser.set(id, member.last_action);
+          const level = Number(member?.level);
           memberMetaByUser.set(id, {
             hasEarlyDischarge: Boolean(member?.has_early_discharge),
             isRevivable: Boolean(member?.is_revivable),
             reviveSetting: String(member?.revive_setting || 'Unknown'),
+            level: Number.isFinite(level) && level > 0 ? level : null,
+            name: typeof member?.name === 'string' ? member.name : '',
           });
           cachedMembers.push({
             id,
@@ -2572,6 +3338,7 @@
             has_early_discharge: Boolean(member?.has_early_discharge),
             is_revivable: Boolean(member?.is_revivable),
             revive_setting: String(member?.revive_setting || 'Unknown'),
+            level: Number.isFinite(level) && level > 0 ? level : null,
           });
         }
 
@@ -2583,6 +3350,17 @@
         sortProfileQueue(hotProfileQueue);
         sortProfileQueue(coldProfileQueue);
         renderAll();
+        // War score and own chain are Public-key context. Both calls are TTL-guarded (60 s / 30 s) and must never delay the snapshot.
+        if (intelEnabled()) {
+          refreshWarContext(factionId).catch(() => { /* handled inside */ });
+          const nextHitBefore = getChainSnapshot()?.nextHit ?? 1;
+          refreshOwnChain().then(() => {
+            if (activeFactionId !== factionId) return;
+            // The chain position changes every row's expected score, so a chain move re-renders rows, not just the chip.
+            if ((getChainSnapshot()?.nextHit ?? 1) !== nextHitBefore) renderAll();
+            else updateTargetToolbars();
+          }).catch(() => { /* handled inside */ });
+        }
       } catch (err) {
         console.warn(`[${SCRIPT}] Could not refresh faction members`, err);
         if (err?.message !== 'API backoff active.') registerApiFailure(err);
@@ -2758,6 +3536,22 @@
       .two-attack-dot.two-attack-win { background:#7dff57; }
       .two-attack-dot.two-attack-loss { background:#ff7468; }
       .two-attack-dot.two-attack-stalemate { background:#9a9a9a; }
+      .two-intel-badge { position:relative; pointer-events:none; white-space:nowrap; box-sizing:border-box; padding:1px 3px; border-radius:3px; border:1px solid rgba(255,255,255,.18); background:rgba(18,18,18,.78); color:#cfcfcf; font:800 7.5px/1.15 Arial,sans-serif; font-variant-numeric:tabular-nums; letter-spacing:-.1px; box-shadow:0 1px 2px rgba(0,0,0,.35); }
+      .two-intel-badge[hidden] { display:none !important; }
+      .two-intel-badge.two-intel-proven { color:#d6ff9b; border-color:rgba(151,220,75,.62); background:rgba(28,48,13,.86); }
+      .two-intel-badge.two-intel-likely { color:#e8f7b3; border-color:rgba(204,235,116,.55); background:rgba(54,63,22,.84); }
+      .two-intel-badge.two-intel-risk { color:#ffb1a6; border-color:rgba(255,95,78,.62); background:rgba(75,24,18,.84); }
+      .two-intel-badge.two-intel-changed { color:#ffd36a; border-color:rgba(255,193,64,.75); background:rgba(55,40,10,.88); }
+      .two-intel-badge.two-intel-best { color:#fff7d1; border-color:rgba(255,224,102,.98); background:rgba(92,70,8,.96); box-shadow:0 0 6px rgba(255,214,64,.55),0 1px 2px rgba(0,0,0,.45); }
+      ul.members-list li.two-best-target { outline:2px solid rgba(255,224,102,.92) !important; outline-offset:-2px; }
+      ul.members-list li.two-best-target .member { box-shadow:inset 4px 0 0 rgba(255,224,102,1),inset 0 0 22px rgba(255,200,40,.14) !important; }
+      .two-context-chip { white-space:nowrap; padding:2px 4px; border-radius:3px; border:1px solid rgba(255,255,255,.16); background:rgba(0,0,0,.20); color:#d7d7d7; font:800 7px/1 Arial,sans-serif; letter-spacing:.15px; font-variant-numeric:tabular-nums; }
+      .two-context-chip[hidden] { display:none !important; }
+      .two-context-chip.two-chip-positive { color:#c9ffa0; border-color:rgba(137,255,67,.45); background:rgba(37,70,17,.45); }
+      .two-context-chip.two-chip-negative { color:#ffaaa0; border-color:rgba(255,95,78,.55); background:rgba(75,24,18,.5); }
+      .two-context-chip.two-chip-urgent { color:#ffe38a; border-color:rgba(255,205,61,.6); background:rgba(83,61,8,.55); }
+      .two-context-chip.two-chip-bonus { color:#fff7d1; border-color:rgba(255,224,102,.95); background:rgba(92,70,8,.9); animation:two-chip-pulse 1s ease-in-out infinite alternate; }
+      @keyframes two-chip-pulse { from{box-shadow:0 0 0 rgba(255,214,64,0)} to{box-shadow:0 0 6px rgba(255,214,64,.7)} }
       .two-age-badge { position:relative; pointer-events:none; white-space:nowrap; box-sizing:border-box; padding:1px 3px; border-radius:3px; border:1px solid rgba(255,255,255,.20); background:rgba(18,18,18,.78); color:#dedede; font:700 8px/1.15 Arial,sans-serif; letter-spacing:-.1px; box-shadow:0 1px 2px rgba(0,0,0,.35); }
       .two-activity-badge { position:relative; pointer-events:none; white-space:nowrap; box-sizing:border-box; padding:1px 3px; border-radius:3px; border:1px solid rgba(255,255,255,.15); background:rgba(18,18,18,.70); color:#aaa; font:700 7px/1.15 Arial,sans-serif; font-variant-numeric:tabular-nums; box-shadow:0 1px 2px rgba(0,0,0,.28); }
       .two-activity-badge.two-activity-online { color:#ff9d8e; border-color:rgba(255,95,78,.38); }
@@ -2807,6 +3601,8 @@
         .two-attack-dot { width:5px; height:5px; flex-basis:5px; }
         .two-age-badge { font-size:7.5px; padding:1px 2px; }
         .two-activity-badge { font-size:6.5px; padding:1px 2px; }
+        .two-intel-badge { font-size:7px; padding:1px 2px; }
+        .two-context-chip { font-size:6.5px; padding:2px 3px; }
         .two-hosp-badge { right:2px; bottom:2px; min-width:25px; font-size:8px; padding:1px 2px; }
         .two-hosp-badge.two-now { font-size:9px; }
       }
@@ -2939,6 +3735,15 @@
 
   function resumeForegroundWork() {
     if (!isActiveView()) return;
+    // Desktop focus/visibility/pageshow events arrive in bursts; coalesce them so one resume costs one API round.
+    if (resumeTimer) return;
+    resumeTimer = setTimeout(() => {
+      resumeTimer = null;
+      if (isActiveView()) performResume();
+    }, RESUME_DEBOUNCE_MS);
+  }
+
+  function performResume() {
     incStat('resumeCount');
     lifecycleGeneration += 1;
     installBodyDiscoveryObserver();
@@ -2947,7 +3752,19 @@
     renderAll();
     scheduleCountdownTick();
     if (activeFactionId) {
-      refreshFactionMembers();
+      // performance.now() can freeze while a mobile webview is suspended, so the wall clock must agree before a snapshot is reused.
+      const snapshotAgePerfMs = lastFreshSnapshotPerfAt > 0 ? monotonicNowMs() - lastFreshSnapshotPerfAt : Number.POSITIVE_INFINITY;
+      const snapshotAgeWallMs = lastFreshSnapshotAt > 0 ? Date.now() - lastFreshSnapshotAt : Number.POSITIVE_INFINITY;
+      if (snapshotAgePerfMs <= RESUME_SNAPSHOT_REUSE_MS && snapshotAgeWallMs <= RESUME_SNAPSHOT_REUSE_MS && !apiPermanentlyDisabled && Date.now() >= globalBackoffUntil) {
+        // A snapshot fetched moments before a quick blur/focus flip is fresher than the normal poll; re-trust it without re-stamping its age.
+        factionLiveReady = true;
+        apiHealth = 'live';
+        apiHealthDetail = '';
+        scheduleFactionRefresh();
+        renderAll();
+      } else {
+        refreshFactionMembers();
+      }
       if (attackHistoryFeatureState !== 'unsupported') refreshRecentAttacks();
     }
     if (hotProfileQueue.length > 0 || coldProfileQueue.length > 0) runProfileWorker();
@@ -2960,6 +3777,7 @@
     saveJson(SIGNUP_CACHE_STORAGE, signupCache);
     flushFactionStatusCache();
     persistAttackHistory();
+    flushOpponentIntel();
   }
 
   function runSelfTests() {
@@ -2976,10 +3794,43 @@
       if (!(STATUS_REFRESH_ACTIVE_MS <= STATUS_REFRESH_WATCH_MS && STATUS_REFRESH_WATCH_MS <= STATUS_REFRESH_IDLE_MS)) faults.push('adaptive polling order');
       if (!(WATCHDOG_INTERVAL_MS > 0 && WATCHDOG_STALE_GRACE_MS >= 0)) faults.push('watchdog constants');
       if (!(REQUEST_TIMEOUT_MS > STATUS_REFRESH_ACTIVE_MS)) faults.push('request timeout budget');
-      const fakeKeyInfo = { info: { selections: { user: ['profile', 'attacksfull'] } } };
-      if (!keyInfoAllowsUserSelection(fakeKeyInfo, 'attacksfull')) faults.push('key capability parsing');
+      const fakeKeyInfo = { info: { selections: { user: ['profile', 'attacks', 'battlestats'] } } };
+      if (!keyInfoAllowsUserSelection(fakeKeyInfo, 'attacks')) faults.push('key capability parsing');
       const testScope = makeWarAttackScope(123, { id: 456, start: 1000 });
       if (testScope.key !== 'war:456:enemy:123' || testScope.from !== 1000) faults.push('war attack scope');
+      if (getStatusUntil({ until: null }) !== null || getStatusUntil({ until: 0 }) !== null || getStatusUntil({ until: 1700000000 }) !== 1700000000) faults.push('nullable hospital until');
+      if (baseRespectForLevel(1) !== 1 || baseRespectForLevel(100) !== 1.5 || baseRespectForLevel(60) !== 1.3) faults.push('base respect formula');
+      if (chainScaleForHit(10) !== 1 || Math.abs(chainScaleForHit(100) - 1.25) > 1e-9 || Math.abs(chainScaleForHit(1000) - 1.5) > 1e-9) faults.push('chain scale formula');
+      if (!isChainBonusHit(250) || isChainBonusHit(251)) faults.push('chain bonus table');
+      if (battleStatScore(100, 100, 100, 100) !== 40) faults.push('battle stat score');
+      if (fairFightFromScores(30, 40) !== 3 || Math.abs(fairFightFromScores(15, 40) - 2) > 1e-9) faults.push('fair fight formula');
+      if (Math.abs(defenderScoreFromFairFight(2, 40) - 15) > 1e-9) faults.push('fair fight inversion');
+      const normalized = normalizeAttack({ id: 9, started: 100, ended: 160, defender: { id: 7, level: 60, faction: { id: 5 } }, result: 'Hospitalized', respect_gain: 5.2, chain: null, is_ranked_war: true, modifiers: { fair_fight: 2.71, war: 2 } });
+      if (!normalized || normalized.ff !== 2.71 || normalized.chain !== null || normalized.defenderFactionId !== 5 || normalized.outcome.kind !== 'win' || !normalized.isRankedWar) faults.push('attack normalization');
+      const decayInfo = getWarDecayInfo({ start: Math.floor(serverNowSec()) - 3600 });
+      if (!decayInfo || decayInfo.started) faults.push('war decay timing');
+
+      // Intel model scenarios (synthetic records, no store access).
+      const nowSec = Math.floor(Date.now() / 1000);
+      const sample = (offsetSec, kind, extra = {}) => ({ t: nowSec - offsetSec, k: kind, s: 6, f: 2.71, c: null, w: 2, rw: 1, ...extra });
+      const unknown = deriveOpponentIntel(null, { level: 60 });
+      if (unknown.label !== 'UNKNOWN' || unknown.ev !== null || unknown.ffLabel !== '') faults.push('intel unknown state');
+      const proven = deriveOpponentIntel({ w: 3, l: 0, n: 0, r: [sample(10, 'win'), sample(20, 'win'), sample(30, 'win')], ff: 2.71, ffAt: nowSec - 10 }, { level: 60, chainSnapshot: { nextHit: 1 } });
+      if (proven.label !== 'PROVEN' || proven.ff !== 2.71 || proven.scoreSource !== 'model') faults.push('intel proven state');
+      if (Math.abs(proven.expectedScore - 1.3 * 2 * 2.71) > 1e-9) faults.push('intel expected score');
+      if (Math.abs(proven.winProb - (3 + 2 * 0.7) / 5) > 1e-9 || Math.abs(proven.ev - proven.winProb * proven.expectedScore) > 1e-9) faults.push('intel win probability');
+      const risk = deriveOpponentIntel({ w: 1, l: 1, n: 0, r: [sample(10, 'loss'), sample(20, 'win')] }, { level: 60 });
+      if (risk.label !== 'RISK') faults.push('intel risk state');
+      const changed = deriveOpponentIntel({ w: 5, l: 2, n: 0, r: [sample(10, 'loss'), sample(20, 'loss'), sample(30, 'win'), sample(40, 'win'), sample(50, 'win'), sample(60, 'win'), sample(70, 'win')] }, { level: 60 });
+      if (changed.label !== 'CHANGED') faults.push('intel changed state');
+      const capped = deriveOpponentIntel({ w: 0, l: 0, n: 0, r: [], ff: 3, ffAt: nowSec - 10, bss: 30, bssAt: nowSec - 10, bssCap: true }, { level: 60, ownBss: 40 });
+      if (capped.label !== 'RISK' || !capped.ffCapped || capped.ff !== 3) faults.push('intel capped fair fight');
+      const projected = deriveOpponentIntel({ w: 1, l: 0, n: 0, r: [sample(10, 'win', { f: 2 })], ff: 2, ffAt: nowSec - 10, bss: 15, bssAt: nowSec - 10, bssCap: false }, { level: 60, ownBss: 80 });
+      if (projected.ffSource !== 'model' || Math.abs(projected.ff - 1.5) > 1e-9 || projected.label !== 'LIKELY') faults.push('intel fair fight projection');
+      const stale = deriveOpponentIntel({ w: 3, l: 0, n: 0, r: [sample(200 * 86400, 'win')], ff: 2.5, ffAt: nowSec - 200 * 86400 }, { level: 60 });
+      if (stale.samples !== 0 || stale.ff !== null || stale.label !== 'UNKNOWN') faults.push('intel stale discounting');
+      const observedOnly = deriveOpponentIntel({ w: 2, l: 0, n: 0, r: [sample(10, 'win', { f: null, s: 4 }), sample(20, 'win', { f: null, s: 8 })] }, { level: null });
+      if (observedOnly.scoreSource !== 'observed' || observedOnly.expectedScore !== 8) faults.push('intel observed score fallback');
       const debugText = JSON.stringify(getDiagnosticSnapshot());
       if (debugText.includes(String(apiKey || '___never___')) && apiKey) faults.push('diagnostic key leak');
       const before = apiPermanentlyDisabled;

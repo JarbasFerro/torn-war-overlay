@@ -4,6 +4,22 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.14.0 - Personal tactical intelligence
+
+- Added personal Fair Fight memory: every outgoing attack record now retains the observed Fair Fight, respect and ranked-war flag, and the opponent's battle-stat score is derived from it so the expected Fair Fight can be re-projected as your own stats grow.
+- Added expected ranked-war score per hit (level base x2 war x Fair Fight x chain scale) and an expected value per 25 energy (`EV`) on each enemy row.
+- Added a transparent `PROVEN | LIKELY | UNKNOWN | RISK | CHANGED` confidence label with tap/hover explanation; one-sample records are never shown as high confidence and evidence older than 180 days is discounted.
+- Added a single `★ BEST` recommendation among current green targets (highest EV; switches to safest proven target when your next chain hit is a bonus hit).
+- Added `WAR +lead / target` and `CHAIN n m:ss` chips above the member list, including the next target-decay time and a `BONUS #n` warning.
+- Switched attack-history polling from `/user/attacksfull` to `/user/attacks` with paginated backfill, `is_ranked_war` scoping and a start-time cursor. A Custom key must now grant `user -> attacks` (and `user -> battlestats` for projection); a Limited key covers both.
+- Switched current-war detection to `/faction/wars` (live score, target and chains), keeping `/faction/warfareranked` as a fallback.
+- Read member level from the faction API payload instead of scraping the DOM.
+- Fixed a potential false green `DUE` target when Torn returns a null hospital timer.
+- Coalesced focus/visibility resume bursts into one API round and re-used a snapshot fetched within the last 3 seconds.
+- Added long-term opponent memory in local storage with pruning (600 opponents, 240 days), a `SET` toggle to hide intel, and a menu command to clear it.
+- Added a Node smoke-test harness (`tools/smoke-test.mjs`) that boots the script and runs its self-tests.
+- Added Torn API ToS disclosure text to the key prompts and the Greasy Fork listing.
+
 ## 0.13.1 - Distribution metadata and canonical source
 
 - Published the canonical production userscript at the repository root as `torn-war-overlay.user.js`.
