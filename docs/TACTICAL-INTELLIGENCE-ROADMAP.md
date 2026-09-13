@@ -2,7 +2,7 @@
 
 **Project:** Torn War Overlay  
 **Research date:** 8 September 2026  
-**Status:** Sections 3, 4, 5, 10 (partial), 11 (partial) and 12 are implemented in v0.14.0; the rest remains research  
+**Status:** Sections 3, 4, 5, 10 (partial), 11 (partial) and 12 are implemented in v0.14.0; the public strength proxy (addendum item 5, the cold-start half of section 13) is implemented in v0.15.0 as match verdicts; the rest remains research  
 **Current production baseline when this document was written:** v0.13.1
 
 ## Addendum (8 September 2026): corrections from the API verification pass and the v0.14.0 implementation
@@ -17,7 +17,9 @@ Verified against Torn OpenAPI 6.13.2 and the rules page snapshot of 28 August 20
 6. **Rules changed on 27 January 2026.** Software must not extract data from unfocused pages to generate alerts or draw attention to another window. The foreground-only design complies; do not add sounds, tab-title flashing or webhooks. A Torn API ToS disclosure table is now required wherever a key is collected.
 7. **`Attack.chain` becomes `null` instead of `0` on 1 January 2027.** v0.14.0 normalizes both.
 
-Revised sequence: v0.15 = public strength proxy + retaliation flag (optional faction tier); v0.16 = release fingerprint, contention and regime-change refinements; later = suppression value and dynamic LEAVE/HOSP.
+Revised sequence: v0.15 = public strength proxy as plain-language match verdicts (shipped 13 September 2026; proxy = sqrt of the ratio of lifetime xanax x250 + energy refills x150 + energy drinks x15, compared against the user's own numbers, with an Elo sanity adjustment); v0.16 = retaliation flag (optional faction tier) and verdict calibration against observed Fair Fight once enough fights exist; v0.17 = release fingerprint, contention and regime-change refinements; later = suppression value and dynamic LEAVE/HOSP.
+
+Calibration note for v0.16: every fight now produces a pair (estimated ratio from the proxy, observed ratio from Fair Fight). Collect those pairs locally and fit a single scale factor so the proxy tiers match reality for this user's stat build; report the fit in diagnostics before changing the tier thresholds.
 
 ## Purpose
 

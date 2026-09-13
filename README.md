@@ -14,6 +14,7 @@ The script is designed primarily for **Torn PDA** and also supports standard use
 - Optional maximum level and Idle-target rules.
 - Early Discharge and revive-risk context.
 - Up to five recent outgoing attack-result dots per opponent, scoped to the current ranked war.
+- A plain-language match verdict on every row, `EASY | GOOD | RISKY | AVOID`, estimated from public stats before you have fought someone and replaced by real evidence after.
 - Personal intel per opponent: observed Fair Fight, expected score per hit, expected value per 25 energy (`EV`) and a `PROVEN | LIKELY | UNKNOWN | RISK | CHANGED` confidence label.
 - A single `★ BEST` recommendation among current green targets, with a tap/hover explanation.
 - `WAR +lead / target` and `CHAIN n m:ss` context chips, including next target-decay time and a `BONUS #n` warning when your next chain hit is a bonus hit.
@@ -49,6 +50,23 @@ The five small result dots show your latest outgoing attacks against that oppone
 
 The main overlay works with a Public-capability Torn API key. Attack-history data requires a Limited key or an appropriately scoped Custom key that can access the user attack-history endpoint.
 
+## How to read a match
+
+In Torn a fight is decided almost entirely by battle stats, not by level or account age. The respect you earn per hit grows with the opponent's strength relative to yours (Torn's Fair Fight multiplier, from 1x up to 3x), so the best target is someone strong enough to pay well but weak enough that you still win. The overlay turns that into one word per row:
+
+| Verdict | Their strength vs yours | What it means |
+|---|---|---|
+| `EASY` | under about 10% | You win comfortably, but the respect per hit is low. |
+| `GOOD` | about 10% to 35% | The sweet spot: good respect and you should still win. |
+| `RISKY` | about 35% to 70% | Maximum respect, but a real chance of losing. |
+| `AVOID` | above about 70%, or you lost to them recently | Do not spend energy here. |
+
+A `~` in front (and a dashed border) means the verdict is an estimate from public stats. Torn publishes every player's lifetime xanax, energy refills and energy drinks, which is a fair proxy for how much gym training they have done. The script compares that with your own numbers. Once you have actually fought someone the estimate is replaced by the real Fair Fight and your win/loss record against them, and the `~` disappears. Tap or hover the badge for the reasons in plain words.
+
+`★ BEST` marks the green target that gives the most expected score for your next 25 energy, and it never picks a `RISKY` or `AVOID` opponent.
+
+Verdict estimates need only a Public key. Fight memory and expected score need a Limited key.
+
 ## Personal intel
 
 Personal intel is learned only from your own outgoing attack records. Nothing is fetched from third-party scouting services and nothing leaves your device except requests to Torn's API.
@@ -78,7 +96,7 @@ Torn API ToS disclosure:
 
 | Item | Statement |
 |---|---|
-| Data storage | Faction statuses, account ages, your own attack results and derived opponent intel are stored locally on the device/browser only. |
+| Data storage | Faction statuses, account ages, public training stats, your own attack results and derived opponent intel are stored locally on the device/browser only. |
 | Data sharing | None. No backend, no analytics, no third-party service. |
 | Purpose of use | Ranked-war target overlay on the faction page. |
 | Key storage and sharing | Manual keys are stored in local browser storage and sent only to `api.torn.com`. Torn PDA supplies its own key. Keys are never shared. |
@@ -135,11 +153,11 @@ Do **not** post API keys in an issue.
 
 ## Development status
 
-Current release candidate: **v0.14.0**.
+Current release candidate: **v0.15.0**.
 
-v0.14.0 adds personal tactical intelligence on top of the v0.13.1 distribution build. The green/yellow targeting path is unchanged apart from the null-timer fix and API-sourced levels.
+v0.15.0 adds plain-language match verdicts on top of v0.14.0's personal tactical intelligence. The green/yellow targeting path is unchanged since v0.13.1 apart from the null-timer fix and API-sourced levels.
 
-The v0.13 line was validated in real ranked-war use. v0.14 needs the same real-war validation before it is promoted; the roadmap lists the questions to answer.
+The v0.13 line was validated in real ranked-war use. v0.14 and v0.15 need the same real-war validation before promotion; the roadmap lists the questions to answer.
 
 ## Disclaimer
 

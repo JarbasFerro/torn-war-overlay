@@ -4,6 +4,15 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.15.0 - Match verdicts
+
+- Added a plain-language match verdict on every enemy row: `EASY`, `GOOD`, `RISKY` or `AVOID`, with a tap/hover explanation in words ("the sweet spot: good respect per hit and you should still win").
+- Verdicts are available before the first fight: the script compares each player's public lifetime training effort (xanax, energy refills, energy drinks) with your own, using a Public key, and shows the result with a `~` prefix (dashed border) to mark it as an estimate. One request per enemy member per week, paced behind the existing age lookups.
+- A real fight replaces the estimate: observed Fair Fight, projected Fair Fight and your win/loss record against the player set the verdict, and a recent loss always shows `AVOID`.
+- Attack Elo far above yours moves an estimate one step harder; three or more wins without a loss move it one step easier.
+- `★ BEST` now works from estimates too, and never picks a `RISKY` or `AVOID` opponent.
+- Fixed the `SET` dialog wording and added the strength cache to the "clear personal intel memory" command.
+
 ## 0.14.0 - Personal tactical intelligence
 
 - Added personal Fair Fight memory: every outgoing attack record now retains the observed Fair Fight, respect and ranked-war flag, and the opponent's battle-stat score is derived from it so the expected Fair Fight can be re-projected as your own stats grow.

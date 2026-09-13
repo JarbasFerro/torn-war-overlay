@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.14.0
-// @description  Ranked-war target overlay for Torn with server-synced hospital countdowns, configurable target highlighting, activity/age context, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling.
+// @version      0.15.0
+// @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
 // @homepageURL  https://github.com/JarbasFerro/torn-war-overlay
@@ -21,15 +21,15 @@
   if (!/(^|\.)torn\.com$/i.test(location.hostname) || location.pathname !== '/factions.php') return;
 
   const SCRIPT = 'Torn War Overlay';
-  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0140__';
+  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0150__';
   if (window[INSTANCE_KEY]) {
-    console.warn(`[${SCRIPT}] v0.14.0 is already running; duplicate injection ignored.`);
+    console.warn(`[${SCRIPT}] v0.15.0 is already running; duplicate injection ignored.`);
     return;
   }
   window[INSTANCE_KEY] = true;
 
   const API_BASE = 'https://api.torn.com/v2';
-  const API_COMMENT = 'two-v0.14.0';
+  const API_COMMENT = 'two-v0.15.0';
   const PDA_API_KEY = '###PDA-APIKEY###';
 
   const KEY_STORAGE = 'two.apiKey.v1';
@@ -42,6 +42,7 @@
   const SETTINGS_STORAGE = 'two.settings.v1';
   const OPPONENT_INTEL_STORAGE = 'two.opponentIntel.v1';
   const SELF_INTEL_STORAGE = 'two.selfIntel.v1';
+  const STRENGTH_CACHE_STORAGE = 'two.strengthCache.v1';
 
   const STATUS_REFRESH_ACTIVE_MS = 10_000;
   const STATUS_REFRESH_WATCH_MS = 20_000;
@@ -80,6 +81,18 @@
   const CHAIN_BONUS_HITS = Object.freeze([10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000]);
   const RESUME_DEBOUNCE_MS = 300;
   const RESUME_SNAPSHOT_REUSE_MS = 3_000;
+  const STRENGTH_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
+  const STRENGTH_CACHE_MAX_ENTRIES = 800;
+  const STRENGTH_REQUEST_GAP_MS = 1_500;
+  const OWN_PROXY_REFRESH_MS = 6 * 60 * 60_000;
+  // Gym energy per item, used only to compare two players' lifetime training effort.
+  const ENERGY_PER_XANAX = 250;
+  const ENERGY_PER_REFILL = 150;
+  const ENERGY_PER_DRINK = 15;
+  const VERDICT_EASY_MAX_RATIO = 0.30;  // Fair Fight below ~1.8: safe but little respect.
+  const VERDICT_GOOD_MAX_RATIO = 0.60;  // Fair Fight ~1.8 to ~2.6: the sweet spot.
+  const VERDICT_RISKY_MAX_RATIO = 0.85; // Fair Fight capped at 3.0; real chance to lose.
+  const ELO_DISAGREEMENT_GAP = 250;
   const TARGET_FLASH_MS = 1_400;
   const EMPTY_ROWS_GRACE_MS = 2_000;
   const MAX_PERSISTED_FACTION_CACHES = 20;
@@ -146,6 +159,13 @@
   let ownChain = null; // { current, timeout, cooldown, fetchedAtPerf }
   let ownChainLastFetchedAt = 0;
   let ownChainUnsupported = false;
+  let ownProxyLastFetchedAt = 0;
+  let ownProxyInFlight = null;
+  let strengthUnsupported = false;
+  let strengthWorkerRunning = false;
+  let strengthRequestInFlight = false;
+  let lastStrengthRequestStart = 0;
+  let strengthSaveTimer = null;
   let selfStatsLastFetchedAt = 0;
   let selfStatsInFlight = null;
   let intelSaveTimer = null;
@@ -178,6 +198,8 @@
     chainRefreshes: 0,
     selfStatsRefreshes: 0,
     bestRecommendations: 0,
+    strengthFetches: 0,
+    ownProxyRefreshes: 0,
   };
 
   const rowsByUser = new Map();
@@ -215,6 +237,9 @@
   const attackHistoryCache = loadObjectJson(ATTACK_HISTORY_CACHE_STORAGE, {});
   const opponentIntel = loadOpponentIntel();
   const selfIntel = loadObjectJson(SELF_INTEL_STORAGE, {});
+  const strengthCache = loadObjectJson(STRENGTH_CACHE_STORAGE, {});
+  const strengthQueue = [];
+  const strengthQueuedIds = new Set();
   const processedAttackIds = new Set(Array.isArray(opponentIntel.seen) ? opponentIntel.seen.map(Number).filter(Number.isFinite) : []);
   let settings = null;
 
@@ -290,8 +315,10 @@
   function prunePersistentCaches() {
     pruneTimestampedObjectCache(factionStatusCache);
     pruneTimestampedObjectCache(attackHistoryCache);
+    pruneStrengthCache();
     saveJson(FACTION_STATUS_CACHE_STORAGE, factionStatusCache);
     saveJson(ATTACK_HISTORY_CACHE_STORAGE, attackHistoryCache);
+    saveJson(STRENGTH_CACHE_STORAGE, strengthCache);
   }
 
   function sanitizeSettings(raw) {
@@ -367,7 +394,7 @@
     const levelRaw = window.prompt(`${SCRIPT}: optional maximum level (leave blank for no limit)`, current.maxLevel == null ? '' : String(current.maxLevel));
     if (levelRaw === null) return false;
     const allowIdle = window.confirm(`${SCRIPT}: should Idle players count as targets?\n\nOK = yes\nCancel = no`);
-    const showIntel = window.confirm(`${SCRIPT}: show personal intel (observed Fair Fight, expected score, BEST target)?\n\nOK = yes\nCancel = no`);
+    const showIntel = window.confirm(`${SCRIPT}: show match verdicts and personal intel (EASY/GOOD/RISKY/AVOID, expected score, BEST target)?\n\nOK = yes\nCancel = no`);
     const next = sanitizeSettings({
       maxAgeYears: Number(ageRaw),
       greenHospitalSec: Number(greenRaw),
@@ -514,7 +541,7 @@
       : null;
     return {
       script: SCRIPT,
-      version: '0.14.0',
+      version: '0.15.0',
       generatedAt: new Date().toISOString(),
       active: isActiveView(),
       factionId: Number.isFinite(Number(activeFactionId)) ? Number(activeFactionId) : null,
@@ -548,6 +575,10 @@
         backfillDone: attackHistoryBackfillDone,
         bestTargetUserId,
         bestTargetReason,
+        strengthCached: Object.keys(strengthCache).length,
+        strengthQueued: strengthQueue.length,
+        strengthUnsupported,
+        ownProxyKnown: trainingEnergy(getOwnProxy()) !== null,
       },
       settings: { ...settings },
       timers: {
@@ -577,7 +608,7 @@
 
   function showDiagnosticSnapshot() {
     const payload = JSON.stringify(getDiagnosticSnapshot(), null, 2);
-    window.prompt(`${SCRIPT} v0.14.0 diagnostics - copy this text if troubleshooting is needed:`, payload);
+    window.prompt(`${SCRIPT} v0.15.0 diagnostics - copy this text if troubleshooting is needed:`, payload);
     return payload;
   }
 
@@ -606,6 +637,7 @@
       GM_registerMenuCommand('Torn War Overlay: clear personal intel memory', () => {
         localStorage.removeItem(OPPONENT_INTEL_STORAGE);
         localStorage.removeItem(SELF_INTEL_STORAGE);
+        localStorage.removeItem(STRENGTH_CACHE_STORAGE);
         // The attack cursor must go too, otherwise only the newest page would be re-read after the reload.
         localStorage.removeItem(ATTACK_HISTORY_CACHE_STORAGE);
         window.location.reload();
@@ -1365,6 +1397,242 @@
     };
   }
 
+  // ---------------------------------------------------------------------------
+  // Public strength proxy (v0.15): a match verdict before the first fight.
+  //
+  // Torn exposes every player's lifetime xanax, energy refills and energy drinks with a Public key. Battle stats grow
+  // roughly in proportion to gym energy, and Torn's Fair Fight compares the sum of square roots of the four stats, so
+  // sqrt(their training energy / your training energy) approximates the score ratio Torn itself uses. This is an
+  // estimate and is always shown with a "~" prefix; a real fight replaces it.
+  // ---------------------------------------------------------------------------
+
+  function proxyFromPopularStats(stats) {
+    if (!stats || typeof stats !== 'object') return null;
+    const num = value => (Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : null);
+    const proxy = {
+      xan: num(stats?.drugs?.xanax),
+      ref: num(stats?.other?.refills?.energy),
+      drink: num(stats?.items?.used?.energy_drinks),
+      se: num(stats?.items?.used?.stat_enhancers),
+      elo: num(stats?.attacking?.elo),
+      won: num(stats?.attacking?.attacks?.won),
+      lost: num(stats?.attacking?.attacks?.lost),
+    };
+    return proxy.xan === null && proxy.ref === null && proxy.drink === null ? null : proxy;
+  }
+
+  function trainingEnergy(proxy) {
+    if (!proxy) return null;
+    const xan = Number(proxy.xan) || 0;
+    const ref = Number(proxy.ref) || 0;
+    const drink = Number(proxy.drink) || 0;
+    if (proxy.xan === null && proxy.ref === null && proxy.drink === null) return null;
+    return xan * ENERGY_PER_XANAX + ref * ENERGY_PER_REFILL + drink * ENERGY_PER_DRINK;
+  }
+
+  function getOwnProxy() {
+    return selfIntel?.proxy && typeof selfIntel.proxy === 'object' ? selfIntel.proxy : null;
+  }
+
+  function getStrengthProxy(userId) {
+    const entry = strengthCache[String(userId)];
+    if (!entry || !Number.isFinite(Number(entry.savedAt))) return null;
+    if (Date.now() - Number(entry.savedAt) > STRENGTH_CACHE_MAX_AGE_MS) return null;
+    return entry;
+  }
+
+  // Score ratio (their battle-stat score / yours) estimated from training effort. Null when either side is unknown.
+  function estimateMatchFromProxy(theirProxy, ownProxy) {
+    const theirs = trainingEnergy(theirProxy);
+    const own = trainingEnergy(ownProxy);
+    if (theirs === null || own === null) return null;
+    // A brand-new account with zero recorded training is still a level-1-ish target: floor both sides at 1 xanax.
+    const ratio = Math.sqrt(Math.max(theirs, ENERGY_PER_XANAX) / Math.max(own, ENERGY_PER_XANAX));
+    const eloTheirs = Number(theirProxy?.elo);
+    const eloOwn = Number(ownProxy?.elo);
+    const eloGap = Number.isFinite(eloTheirs) && Number.isFinite(eloOwn) && eloTheirs > 0 && eloOwn > 0 ? eloTheirs - eloOwn : null;
+    return {
+      ratio,
+      ff: fairFightFromScores(ratio, 1),
+      capped: ratio >= 0.75,
+      energyTheirs: theirs,
+      energyOwn: own,
+      eloGap,
+      eloDisagrees: eloGap !== null && eloGap >= ELO_DISAGREEMENT_GAP && ratio < VERDICT_RISKY_MAX_RATIO,
+    };
+  }
+
+  const VERDICT_ORDER = Object.freeze(['EASY', 'GOOD', 'RISKY', 'AVOID']);
+
+  function verdictFromRatio(ratio) {
+    if (ratio === null || ratio === undefined) return null;
+    const value = Number(ratio);
+    if (!Number.isFinite(value) || value < 0) return null;
+    if (value < VERDICT_EASY_MAX_RATIO) return 'EASY';
+    if (value < VERDICT_GOOD_MAX_RATIO) return 'GOOD';
+    if (value < VERDICT_RISKY_MAX_RATIO) return 'RISKY';
+    return 'AVOID';
+  }
+
+  function shiftVerdict(verdict, steps) {
+    const index = VERDICT_ORDER.indexOf(verdict);
+    if (index < 0) return verdict;
+    return VERDICT_ORDER[Math.min(VERDICT_ORDER.length - 1, Math.max(0, index + steps))];
+  }
+
+  function pruneStrengthCache() {
+    const now = Date.now();
+    const entries = Object.entries(strengthCache)
+      .filter(([, value]) => value && Number.isFinite(Number(value.savedAt)) && now - Number(value.savedAt) <= STRENGTH_CACHE_MAX_AGE_MS)
+      .sort((a, b) => Number(b[1].savedAt) - Number(a[1].savedAt))
+      .slice(0, STRENGTH_CACHE_MAX_ENTRIES);
+    for (const key of Object.keys(strengthCache)) delete strengthCache[key];
+    for (const [key, value] of entries) strengthCache[key] = value;
+  }
+
+  function scheduleStrengthCacheSave() {
+    if (strengthSaveTimer) return;
+    strengthSaveTimer = setTimeout(() => {
+      strengthSaveTimer = null;
+      pruneStrengthCache();
+      saveJson(STRENGTH_CACHE_STORAGE, strengthCache);
+    }, INTEL_SAVE_DEBOUNCE_MS);
+  }
+
+  async function refreshOwnProxy({ force = false } = {}) {
+    if (!intelEnabled() || !apiKey || apiPermanentlyDisabled) return getOwnProxy();
+    if (ownProxyInFlight) return ownProxyInFlight;
+    const cachedAt = Number(getOwnProxy()?.updatedAt) || 0;
+    if (!force && Date.now() - cachedAt < OWN_PROXY_REFRESH_MS) return getOwnProxy();
+    if (!force && Date.now() - ownProxyLastFetchedAt < 5 * 60_000) return getOwnProxy();
+    if (Date.now() < globalBackoffUntil) return getOwnProxy();
+    ownProxyLastFetchedAt = Date.now();
+
+    const flight = (async () => {
+      try {
+        const data = await apiGet('/user/personalstats', { query: { cat: 'popular' } });
+        const proxy = proxyFromPopularStats(data?.personalstats);
+        if (!proxy) return getOwnProxy();
+        selfIntel.proxy = { ...proxy, updatedAt: Date.now() };
+        saveJson(SELF_INTEL_STORAGE, selfIntel);
+        incStat('ownProxyRefreshes');
+        renderAll();
+        return selfIntel.proxy;
+      } catch (err) {
+        if (Number(err?.code) === 7 || Number(err?.code) === 16) {
+          strengthUnsupported = true;
+          clearStrengthQueue();
+        }
+        if (err?.message !== 'API backoff active.') {
+          registerApiFailure(err);
+          console.warn(`[${SCRIPT}] Could not read own public stats; match verdicts need them for comparison.`, err);
+        }
+        return getOwnProxy();
+      }
+    })().finally(() => {
+      if (ownProxyInFlight === flight) ownProxyInFlight = null;
+    });
+
+    ownProxyInFlight = flight;
+    return flight;
+  }
+
+  function strengthPriority(userId) {
+    const target = getTargetState(userId);
+    if (target.notOnline && target.attackWindow) return 0;
+    if (target.notOnline && target.hospitalWatchWindow) return 1;
+    if (target.attackWindow) return 2;
+    if (target.notOnline) return 3;
+    return 4;
+  }
+
+  function queueStrengthForVisibleRows() {
+    if (!intelEnabled() || !apiKey || apiPermanentlyDisabled || strengthUnsupported) return;
+    const ids = [];
+    for (const userId of rowsByUser.keys()) {
+      if (strengthQueuedIds.has(userId) || getStrengthProxy(userId)) continue;
+      // A usable observed fight already gives a better answer than any estimate; do not spend a request on it.
+      if (getOpponentIntel(userId).ratioSource !== 'none') continue;
+      ids.push(userId);
+    }
+    if (ids.length === 0) return;
+    ids.sort((a, b) => strengthPriority(a) - strengthPriority(b) || getBestLevelForUser(a) - getBestLevelForUser(b));
+    for (const userId of ids) {
+      strengthQueuedIds.add(userId);
+      strengthQueue.push(userId);
+    }
+    runStrengthWorker();
+  }
+
+  function clearStrengthQueue() {
+    strengthQueue.length = 0;
+    strengthQueuedIds.clear();
+  }
+
+  const EMPTY_STRENGTH_PROXY = Object.freeze({ xan: null, ref: null, drink: null, se: null, elo: null, won: null, lost: null });
+
+  function storeStrengthProxy(userId, proxy) {
+    strengthCache[String(userId)] = { ...EMPTY_STRENGTH_PROXY, ...(proxy || {}), savedAt: Date.now() };
+    scheduleStrengthCacheSave();
+  }
+
+  async function fetchStrength(userId) {
+    incStat('strengthFetches');
+    const data = await apiGet(`/user/${userId}/personalstats`, { query: { cat: 'popular' } });
+    storeStrengthProxy(userId, proxyFromPopularStats(data?.personalstats));
+  }
+
+  async function runStrengthWorker() {
+    if (strengthWorkerRunning) return;
+    strengthWorkerRunning = true;
+    try {
+      while (strengthQueue.length > 0 || strengthRequestInFlight) {
+        if (apiPermanentlyDisabled || strengthUnsupported || !intelEnabled()) { clearStrengthQueue(); break; }
+        if (!isActiveView()) { await sleep(500); continue; }
+        if (Date.now() < globalBackoffUntil) { await sleep(Math.min(500, Math.max(50, globalBackoffUntil - Date.now()))); continue; }
+        // Exact-age confirmation is more urgent than estimates, and in profile-fallback mode the cold queue is already
+        // spending the budget; never run two paced workers at once.
+        if (hotProfileQueue.length > 0 || (fallbackProfileMode && coldProfileQueue.length > 0) || profileRequestsInFlight > 0 || strengthRequestInFlight) { await sleep(150); continue; }
+        const waitForGap = STRENGTH_REQUEST_GAP_MS - (Date.now() - lastStrengthRequestStart);
+        if (waitForGap > 0) { await sleep(Math.min(waitForGap, 100)); continue; }
+
+        const userId = strengthQueue.shift();
+        strengthQueuedIds.delete(userId);
+        if (userId === undefined || !rowsByUser.has(userId) || getStrengthProxy(userId)) continue;
+
+        strengthRequestInFlight = true;
+        lastStrengthRequestStart = Date.now();
+        fetchStrength(userId)
+          .then(() => {
+            registerApiSuccess();
+            renderUser(userId);
+            updateTargetToolbars();
+          })
+          .catch(err => {
+            if (Number(err?.code) === 7 || Number(err?.code) === 16) {
+              strengthUnsupported = true;
+              console.warn(`[${SCRIPT}] Public stats unavailable for this key; match verdicts will rely on fights only.`, err);
+              return;
+            }
+            console.warn(`[${SCRIPT}] Could not fetch public stats for ${userId}`, err);
+            if (err?.message !== 'API backoff active.') registerApiFailure(err);
+            if (err?.retryable && !apiPermanentlyDisabled) {
+              if (rowsByUser.has(userId) && !strengthQueuedIds.has(userId)) {
+                strengthQueuedIds.add(userId);
+                strengthQueue.push(userId);
+              }
+            } else {
+              // A permanent per-player failure (e.g. incorrect ID) is remembered so each scan does not re-queue it.
+              storeStrengthProxy(userId, null);
+            }
+          })
+          .finally(() => { strengthRequestInFlight = false; });
+      }
+    } finally {
+      strengthWorkerRunning = false;
+    }
+  }
+
   function normalizeAttack(attack) {
     const id = Number(attack?.id);
     const started = Number(attack?.started);
@@ -1454,11 +1722,14 @@
       ownBss: getOwnBss(),
       chainSnapshot: getChainSnapshot(),
       nowMs: Date.now(),
+      proxy: estimateMatchFromProxy(getStrengthProxy(userId), getOwnProxy()),
+      theirProxy: getStrengthProxy(userId),
+      ownProxy: getOwnProxy(),
     });
   }
 
   // Pure derivation so the model can be self-tested without touching the persistent store.
-  function deriveOpponentIntel(record, { level = null, ownBss = null, chainSnapshot = null, nowMs = Date.now() } = {}) {
+  function deriveOpponentIntel(record, { level = null, ownBss = null, chainSnapshot = null, nowMs = Date.now(), proxy = null, theirProxy = null, ownProxy = null } = {}) {
     const samples = (Array.isArray(record?.r) ? record.r : [])
       .filter(sample => sample && Number.isFinite(Number(sample.t)) && nowMs - Number(sample.t) * 1000 <= INTEL_SAMPLE_MAX_AGE_MS);
     const decisive = samples.filter(sample => sample.k === 'win' || sample.k === 'loss');
@@ -1482,8 +1753,26 @@
     }
     if (ff !== null && ffCapped) ff = FAIR_FIGHT_CAP; // A capped observation is only a lower bound on opponent strength.
 
+    // Strength ratio (their score / ours) is what the verdict is built on. Real fights win over the public-stats estimate.
+    let ratio = null;
+    let ratioSource = 'none';
+    if (record?.bss && ownBss) {
+      ratio = record.bss / ownBss;
+      ratioSource = 'model';
+    } else if (ff !== null) {
+      ratio = defenderScoreFromFairFight(ff, 1);
+      ratioSource = 'observed';
+    } else if (proxy && Number.isFinite(proxy.ratio)) {
+      ratio = proxy.ratio;
+      ratioSource = 'proxy';
+      ff = proxy.ff;
+      ffSource = 'proxy';
+      ffCapped = proxy.capped;
+    }
+
     // Smoothed personal win probability. The prior leans on Fair Fight: a capped FF means the opponent is at least 75% of our score.
-    const priorMean = ff === null ? 0.6 : ffCapped ? 0.45 : ff >= 2.5 ? 0.7 : 0.88;
+    let priorMean = ff === null ? 0.6 : ffCapped ? 0.45 : ff >= 2.5 ? 0.7 : 0.88;
+    if (ffSource === 'proxy') priorMean = 0.6 + (priorMean - 0.6) * 0.6; // An estimate deserves less conviction than a fight.
     const priorWeight = 2;
     const winProb = (wins + priorWeight * priorMean) / (decisive.length + priorWeight);
 
@@ -1497,7 +1786,28 @@
     else if (decisive.length > 0 && (decisive[0].k === 'loss' || losses * 3 > wins)) label = 'RISK';
     else if (decisive.length >= 3 && losses === 0) label = 'PROVEN';
     else if (wins >= 1) label = 'LIKELY';
-    else if (ff !== null) label = ffCapped ? 'RISK' : ff <= 2.5 ? 'LIKELY' : 'UNKNOWN';
+    else if (ff !== null) label = ffCapped ? 'RISK' : ff <= (ffSource === 'proxy' ? 2.4 : 2.5) ? 'LIKELY' : 'UNKNOWN';
+
+    // Plain-language verdict. Evidence from real fights adjusts the strength-based tier.
+    let verdict = verdictFromRatio(ratio);
+    const verdictReasons = [];
+    if (verdict !== null && ffCapped && ratioSource === 'observed' && VERDICT_ORDER.indexOf(verdict) < VERDICT_ORDER.indexOf('RISKY')) {
+      // An observed capped Fair Fight only proves they are at least 75% of your score: escalate, never lower.
+      verdict = 'RISKY';
+      verdictReasons.push('Fair Fight is capped, so they are at least 75% of your strength');
+    }
+    if (verdict !== null && ratioSource === 'proxy' && proxy?.eloDisagrees) {
+      verdict = shiftVerdict(verdict, 1);
+      verdictReasons.push(`their attack Elo is ${proxy.eloGap} above yours, so the estimate was moved one step harder`);
+    }
+    if (label === 'RISK' || label === 'CHANGED') {
+      verdict = 'AVOID';
+      verdictReasons.push(label === 'CHANGED' ? 'you have lost your two latest fights against them after winning before' : 'you lost your latest fight against them');
+    } else if (label === 'PROVEN' && verdict !== null && verdict !== 'EASY') {
+      verdict = shiftVerdict(verdict, -1);
+      verdictReasons.push(`you have beaten them ${wins} times without a loss`);
+    }
+    const verdictEstimated = verdict !== null && ratioSource === 'proxy';
 
     // Expected ranked-war score for a Leave/Hospitalize hit at the next chain position.
     const base = baseRespectForLevel(Number.isFinite(Number(level)) && Number(level) > 0 ? Number(level) : record?.lvl);
@@ -1539,8 +1849,17 @@
       chainScale,
       nextHit,
       ownBssKnown: Boolean(ownBss),
+      ratio,
+      ratioSource,
+      verdict,
+      verdictEstimated,
+      verdictReasons,
+      proxy,
+      theirProxy,
+      ownProxy,
       ffLabel: ff === null ? '' : ffCapped ? 'FF3.0+' : `FF${ff.toFixed(2)}`,
       evLabel: ev === null ? '' : `EV${ev.toFixed(1)}`,
+      verdictLabel: verdict === null ? '' : `${verdictEstimated ? '~' : ''}${verdict}`,
     };
   }
 
@@ -1548,7 +1867,7 @@
     const previous = bestTargetUserId;
     bestTargetUserId = null;
     bestTargetReason = '';
-    if (!intelEnabled() || attackHistoryFeatureState === 'unsupported' || !isLiveStatusTrusted()) {
+    if (!intelEnabled() || !isLiveStatusTrusted()) {
       return { changed: previous !== null, previous, current: null };
     }
     const chainSnapshot = getChainSnapshot();
@@ -1559,6 +1878,8 @@
       if (!target.ideal) continue;
       const intel = getOpponentIntel(userId);
       if (intel.ev === null || !(intel.label === 'PROVEN' || intel.label === 'LIKELY')) continue;
+      // Never recommend a fight the verdict itself calls risky, whatever the win record says.
+      if (intel.verdict !== null && intel.verdict !== 'EASY' && intel.verdict !== 'GOOD') continue;
       // During a bonus hit the priority is securing it, so rank by win confidence first.
       const rank = bonusNext ? [intel.winProb, intel.ev] : [intel.ev, intel.winProb];
       const better = !best
@@ -1592,9 +1913,40 @@
     return badge;
   }
 
+  function formatCount(value) {
+    if (value === null || value === undefined) return '?';
+    const number = Number(value);
+    return Number.isFinite(number) ? number.toLocaleString('en-US') : '?';
+  }
+
+  function describeVerdict(intel) {
+    if (intel.verdict === null) {
+      return intel.ownProxy
+        ? 'Verdict: ? (no estimate yet; their public stats are still loading, or unavailable)'
+        : 'Verdict: ? (no estimate yet; your own public stats are needed for comparison)';
+    }
+    const strengthPct = intel.ratio !== null ? Math.round(intel.ratio * intel.ratio * 100) : null;
+    const meaning = {
+      EASY: 'you should win comfortably, but the respect per hit is low',
+      GOOD: 'the sweet spot: good respect per hit and you should still win',
+      RISKY: 'high respect per hit, but a real chance of losing',
+      AVOID: 'they are close to or above your strength',
+    }[intel.verdict];
+    const parts = [`Verdict: ${intel.verdictLabel}${intel.verdictEstimated ? ' (estimated from public stats)' : ''}: ${meaning}`];
+    if (strengthPct !== null) parts.push(`They look about ${strengthPct}% of your raw battle stats (score ratio ${intel.ratio.toFixed(2)})`);
+    for (const reason of intel.verdictReasons) parts.push(reason.charAt(0).toUpperCase() + reason.slice(1));
+    if (intel.verdictEstimated && intel.theirProxy && intel.ownProxy) {
+      parts.push(`Training effort: ${formatCount(intel.theirProxy.xan)} xanax vs your ${formatCount(intel.ownProxy.xan)}; ${formatCount(intel.theirProxy.ref)} energy refills vs your ${formatCount(intel.ownProxy.ref)}; ${formatCount(intel.theirProxy.drink)} energy drinks vs your ${formatCount(intel.ownProxy.drink)}`);
+      if (intel.theirProxy.elo !== null && intel.ownProxy.elo !== null) parts.push(`Attack Elo ${formatCount(intel.theirProxy.elo)} vs your ${formatCount(intel.ownProxy.elo)}`);
+      if (intel.theirProxy.won !== null && intel.theirProxy.lost !== null) parts.push(`Their attack record: ${formatCount(intel.theirProxy.won)} won, ${formatCount(intel.theirProxy.lost)} lost`);
+    }
+    return parts.join(' | ');
+  }
+
   function describeIntel(intel, userId) {
     const lines = [];
     if (bestTargetUserId === userId) lines.push(`BEST: ${bestTargetReason}`);
+    lines.push(describeVerdict(intel));
     lines.push(`Confidence: ${intel.label}`);
     if (intel.samples > 0) {
       lines.push(`Recent record: ${intel.wins}-${intel.losses} (${intel.samples} decisive fights in the last 180 days${intel.lastResultAt ? `, last ${formatRelativeAgeFromNow(intel.lastResultAt)}` : ''})`);
@@ -1604,8 +1956,8 @@
     if (intel.lifetimeWins + intel.lifetimeLosses > intel.samples) lines.push(`Lifetime record: ${intel.lifetimeWins}-${intel.lifetimeLosses}`);
     if (intel.ff !== null) {
       lines.push(intel.ffCapped
-        ? 'Fair Fight: 3.00 (capped: opponent is at least 75% of your battle-stat score)'
-        : `Fair Fight: ${intel.ff.toFixed(2)} (${intel.ffSource === 'model' ? 'projected from an observed fight and your current stats' : 'last observed value'})`);
+        ? `Fair Fight: 3.00 (capped: opponent is at least 75% of your battle-stat score${intel.ffSource === 'proxy' ? ', estimated' : ''})`
+        : `Fair Fight: ${intel.ff.toFixed(2)} (${intel.ffSource === 'model' ? 'projected from an observed fight and your current stats' : intel.ffSource === 'proxy' ? 'estimated from public stats; a real fight will replace this' : 'last observed value'})`);
     } else {
       lines.push('Fair Fight: unknown until you fight this player once');
     }
@@ -1622,18 +1974,25 @@
 
   function renderIntelBadge(badge, userId, target) {
     if (!badge) return;
-    const enabled = intelEnabled() && attackHistoryFeatureState !== 'unsupported';
+    // Verdicts from public stats work with a Public key; fight memory and EV need the attack-history capability.
+    const enabled = intelEnabled();
     const intel = enabled ? getOpponentIntel(userId) : null;
     const isBest = enabled && bestTargetUserId === userId;
-    const text = !intel ? '' : isBest
-      ? `★ ${intel.evLabel || intel.ffLabel}`
-      : intel.evLabel || intel.ffLabel || (intel.label !== 'UNKNOWN' ? intel.label : '');
-    const signature = `${text}|${intel?.label || ''}|${intel ? `${intel.wins}-${intel.losses}:${intel.nextHit}:${intel.ffSource}` : ''}|${isBest ? 1 : 0}|${target?.ideal ? 1 : 0}|${target?.good ? 1 : 0}`;
+    const showEv = attackHistoryFeatureState !== 'unsupported';
+    let text = '';
+    if (intel) {
+      const verdict = intel.verdictLabel;
+      const detail = showEv ? intel.evLabel : '';
+      text = [isBest ? '★' : '', verdict, detail].filter(Boolean).join(' ');
+      if (!text && showEv && intel.label !== 'UNKNOWN') text = intel.label;
+    }
+    const tone = intel?.verdict ? intel.verdict.toLowerCase() : String(intel?.label || 'unknown').toLowerCase();
+    const signature = `${text}|${tone}|${intel ? `${intel.wins}-${intel.losses}:${intel.nextHit}:${intel.ffSource}:${intel.ratioSource}:${intel.verdictReasons.length}` : ''}|${isBest ? 1 : 0}|${target?.ideal ? 1 : 0}|${target?.good ? 1 : 0}`;
     if (badge.dataset.twoSignature === signature) return;
     badge.dataset.twoSignature = signature;
     badge.hidden = text === '';
     badge.textContent = text;
-    badge.className = `two-intel-badge two-intel-${String(intel?.label || 'unknown').toLowerCase()}${isBest ? ' two-intel-best' : ''}`;
+    badge.className = `two-intel-badge two-intel-${tone}${intel?.verdictEstimated ? ' two-intel-estimated' : ''}${isBest ? ' two-intel-best' : ''}`;
     badge.title = intel ? describeIntel(intel, userId) : 'Personal intel';
   }
 
@@ -2018,7 +2377,7 @@
     const intel = intelEnabled() ? getOpponentIntel(userId) : null;
     return [
       filterMode,
-      intel ? `${intel.label}:${intel.evLabel}:${intel.ffLabel}:${intel.wins}-${intel.losses}:${intel.nextHit}` : 'nointel',
+      intel ? `${intel.label}:${intel.verdictLabel}:${intel.evLabel}:${intel.ffLabel}:${intel.wins}-${intel.losses}:${intel.nextHit}:${intel.ratioSource}` : 'nointel',
       bestTargetUserId === userId ? 'best' : '',
       configuredMaxAgeYears(),
       configuredGreenHospitalSec(),
@@ -2474,6 +2833,10 @@
     renderAll();
     if (isLiveStatusTrusted()) reconcileDomStatusOverrides();
     if (ageSearchComplete || ageSearchUnavailable) queueMissingProfilesByPriority();
+    if (intelEnabled() && apiKey) {
+      refreshOwnProxy().catch(() => { /* handled inside */ });
+      queueStrengthForVisibleRows();
+    }
   }
 
   function getBestLevelForUser(userId) {
@@ -3168,6 +3531,7 @@
     hotProfileQueue.length = 0;
     coldProfileQueue.length = 0;
     queuedProfiles.clear();
+    clearStrengthQueue();
 
     factionLiveReady = false;
     lastFreshSnapshotAt = 0;
@@ -3542,6 +3906,11 @@
       .two-intel-badge.two-intel-likely { color:#e8f7b3; border-color:rgba(204,235,116,.55); background:rgba(54,63,22,.84); }
       .two-intel-badge.two-intel-risk { color:#ffb1a6; border-color:rgba(255,95,78,.62); background:rgba(75,24,18,.84); }
       .two-intel-badge.two-intel-changed { color:#ffd36a; border-color:rgba(255,193,64,.75); background:rgba(55,40,10,.88); }
+      .two-intel-badge.two-intel-easy { color:#bfe8c4; border-color:rgba(140,200,150,.55); background:rgba(22,44,26,.84); }
+      .two-intel-badge.two-intel-good { color:#d6ff9b; border-color:rgba(151,220,75,.70); background:rgba(28,48,13,.88); }
+      .two-intel-badge.two-intel-risky { color:#ffd36a; border-color:rgba(255,193,64,.75); background:rgba(55,40,10,.88); }
+      .two-intel-badge.two-intel-avoid { color:#ffb1a6; border-color:rgba(255,95,78,.70); background:rgba(75,24,18,.88); }
+      .two-intel-badge.two-intel-estimated { border-style:dashed; }
       .two-intel-badge.two-intel-best { color:#fff7d1; border-color:rgba(255,224,102,.98); background:rgba(92,70,8,.96); box-shadow:0 0 6px rgba(255,214,64,.55),0 1px 2px rgba(0,0,0,.45); }
       ul.members-list li.two-best-target { outline:2px solid rgba(255,224,102,.92) !important; outline-offset:-2px; }
       ul.members-list li.two-best-target .member { box-shadow:inset 4px 0 0 rgba(255,224,102,1),inset 0 0 22px rgba(255,200,40,.14) !important; }
@@ -3768,6 +4137,7 @@
       if (attackHistoryFeatureState !== 'unsupported') refreshRecentAttacks();
     }
     if (hotProfileQueue.length > 0 || coldProfileQueue.length > 0) runProfileWorker();
+    if (strengthQueue.length > 0) runStrengthWorker();
     startWatchdog();
   }
 
@@ -3778,6 +4148,9 @@
     flushFactionStatusCache();
     persistAttackHistory();
     flushOpponentIntel();
+    if (strengthSaveTimer) { clearTimeout(strengthSaveTimer); strengthSaveTimer = null; }
+    pruneStrengthCache();
+    saveJson(STRENGTH_CACHE_STORAGE, strengthCache);
   }
 
   function runSelfTests() {
@@ -3831,6 +4204,36 @@
       if (stale.samples !== 0 || stale.ff !== null || stale.label !== 'UNKNOWN') faults.push('intel stale discounting');
       const observedOnly = deriveOpponentIntel({ w: 2, l: 0, n: 0, r: [sample(10, 'win', { f: null, s: 4 }), sample(20, 'win', { f: null, s: 8 })] }, { level: null });
       if (observedOnly.scoreSource !== 'observed' || observedOnly.expectedScore !== 8) faults.push('intel observed score fallback');
+
+      // Match verdict scenarios.
+      if (trainingEnergy({ xan: 2, ref: 1, drink: 10 }) !== 2 * 250 + 150 + 10 * 15) faults.push('training energy');
+      if (trainingEnergy({ xan: null, ref: null, drink: null }) !== null) faults.push('training energy null');
+      const ownProxy = { xan: 1000, ref: 400, drink: 100, elo: 2000, won: 5000, lost: 500 };
+      const weak = estimateMatchFromProxy({ xan: 100, ref: 20, drink: 10, elo: 1500 }, ownProxy);
+      if (!weak || !(weak.ratio > 0.25 && weak.ratio < 0.35) || weak.capped || weak.eloDisagrees) faults.push('proxy weak estimate');
+      const equal = estimateMatchFromProxy({ ...ownProxy }, ownProxy);
+      if (!equal || Math.abs(equal.ratio - 1) > 1e-9 || !equal.capped || equal.ff !== 3) faults.push('proxy equal estimate');
+      if (estimateMatchFromProxy(null, ownProxy) !== null || estimateMatchFromProxy(ownProxy, null) !== null) faults.push('proxy missing side');
+      if (verdictFromRatio(0.2) !== 'EASY' || verdictFromRatio(0.45) !== 'GOOD' || verdictFromRatio(0.7) !== 'RISKY' || verdictFromRatio(0.9) !== 'AVOID' || verdictFromRatio(null) !== null) faults.push('verdict tiers');
+      if (shiftVerdict('RISKY', -1) !== 'GOOD' || shiftVerdict('AVOID', 1) !== 'AVOID' || shiftVerdict('EASY', -1) !== 'EASY') faults.push('verdict shift');
+      const goodProxy = deriveOpponentIntel(null, { level: 40, proxy: { ratio: 0.45, ff: 2.2, capped: false, eloGap: 0, eloDisagrees: false } });
+      if (goodProxy.verdict !== 'GOOD' || !goodProxy.verdictEstimated || goodProxy.verdictLabel !== '~GOOD' || goodProxy.label !== 'LIKELY' || goodProxy.ffSource !== 'proxy' || goodProxy.ev === null) faults.push('verdict from proxy');
+      const eloBump = deriveOpponentIntel(null, { level: 40, proxy: { ratio: 0.45, ff: 2.2, capped: false, eloGap: 400, eloDisagrees: true } });
+      if (eloBump.verdict !== 'RISKY' || eloBump.verdictReasons.length !== 1) faults.push('verdict elo disagreement');
+      const provenBump = deriveOpponentIntel({ w: 3, l: 0, n: 0, r: [sample(10, 'win', { f: 3 }), sample(20, 'win', { f: 3 }), sample(30, 'win', { f: 3 })], ff: 3, ffAt: nowSec - 10 }, { level: 40 });
+      if (provenBump.verdict !== 'GOOD' || provenBump.verdictEstimated) faults.push('verdict proven bump');
+      const lostRecently = deriveOpponentIntel({ w: 0, l: 1, n: 0, r: [sample(10, 'loss', { f: 1.5 })], ff: 1.5, ffAt: nowSec - 10 }, { level: 40 });
+      if (lostRecently.verdict !== 'AVOID') faults.push('verdict after loss');
+      const fightBeatsProxy = deriveOpponentIntel({ w: 1, l: 0, n: 0, r: [sample(10, 'win', { f: 2.9 })], ff: 2.9, ffAt: nowSec - 10 }, { level: 40, proxy: { ratio: 0.2, ff: 1.53, capped: false, eloGap: 0, eloDisagrees: false } });
+      if (fightBeatsProxy.ratioSource !== 'observed' || fightBeatsProxy.verdict !== 'RISKY' || fightBeatsProxy.verdictEstimated) faults.push('observed fight overrides proxy');
+      const noInfo = deriveOpponentIntel(null, { level: 40 });
+      if (noInfo.verdict !== null || noInfo.verdictLabel !== '') faults.push('verdict unknown');
+      const strongProxyLikely = deriveOpponentIntel({ w: 1, l: 0, n: 0, r: [sample(10, 'win', { f: null })] }, { level: 40, proxy: { ratio: 1.2, ff: 3, capped: true, eloGap: 0, eloDisagrees: false } });
+      if (strongProxyLikely.verdict !== 'AVOID') faults.push('capped proxy stays avoid');
+      const cappedObservedWin = deriveOpponentIntel({ w: 1, l: 0, n: 0, r: [sample(10, 'win', { f: 3 })], ff: 3, ffAt: nowSec - 10 }, { level: 40 });
+      if (cappedObservedWin.verdict !== 'RISKY') faults.push('capped observed escalates to risky');
+      if (!proxyFromPopularStats({ drugs: { xanax: 5 }, other: { refills: { energy: 2 } }, items: { used: { energy_drinks: 3 } }, attacking: { elo: 1200, attacks: { won: 10, lost: 2 } } })) faults.push('popular stats parsing');
+      if (proxyFromPopularStats({ attacking: { elo: 1200 } }) !== null) faults.push('popular stats without training');
       const debugText = JSON.stringify(getDiagnosticSnapshot());
       if (debugText.includes(String(apiKey || '___never___')) && apiKey) faults.push('diagnostic key leak');
       const before = apiPermanentlyDisabled;
