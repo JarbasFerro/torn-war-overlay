@@ -18,6 +18,7 @@ The script is designed primarily for **Torn PDA** and also supports standard use
 - Personal intel per opponent: observed Fair Fight, expected score per hit, expected value per 25 energy (`EV`) and a `PROVEN | LIKELY | UNKNOWN | RISK | CHANGED` confidence label.
 - A single `★ BEST` recommendation among current green targets, with a tap/hover explanation.
 - `WAR +lead / target` and `CHAIN n m:ss` context chips, including next target-decay time and a `BONUS #n` warning when your next chain hit is a bonus hit.
+- The same verdict, `EV`, hospital countdown and chain state on the attack page itself, in a small floating panel with a tap-to-expand explanation.
 - Adaptive API polling, caching, incremental attack-history updates and foreground-only live processing.
 
 ## Default target rules
@@ -155,9 +156,9 @@ Do **not** post API keys in an issue.
 
 ## Development status
 
-Current release candidate: **v0.16.0**.
+Current release candidate: **v0.17.0**.
 
-v0.16.0 replaces the v0.15 strength estimate with a model built on Torn's gym formula, natural energy and self-calibration from real fights. The green/yellow targeting path is unchanged since v0.13.1 apart from the null-timer fix and API-sourced levels; old members now show their exact age instead of `>=1.5y`.
+v0.17.0 carries the verdict, expected value, hospital countdown and chain state onto the attack page. v0.16.0 replaced the v0.15 strength estimate with a model built on Torn's gym formula, natural energy and self-calibration from real fights. The green/yellow targeting path is unchanged since v0.13.1 apart from the null-timer fix and API-sourced levels; old members now show their exact age instead of `>=1.5y`.
 
 The v0.13 line was validated in real ranked-war use. v0.14 to v0.16 need the same real-war validation before promotion; `docs/RESEARCH-2026-09-13.md` explains the model and lists what to check.
 

@@ -1,13 +1,16 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.16.0
+// @version      0.17.0
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
 // @homepageURL  https://github.com/JarbasFerro/torn-war-overlay
 // @supportURL   https://github.com/JarbasFerro/torn-war-overlay/issues
 // @match        https://www.torn.com/factions.php*
+// @match        https://www.torn.com/loader.php?sid=attack*
+// @match        https://www.torn.com/loader2.php?sid=attack*
+// @match        https://www.torn.com/page.php?sid=attack*
 // @connect      api.torn.com
 // @grant        GM_xmlhttpRequest
 // @grant        GM_registerMenuCommand
@@ -17,19 +20,29 @@
 (() => {
   'use strict';
 
-  // Safety guard: even if a userscript manager ignores metadata, never run outside the Torn faction page.
-  if (!/(^|\.)torn\.com$/i.test(location.hostname) || location.pathname !== '/factions.php') return;
+  // Safety guard: even if a userscript manager ignores metadata, never run outside the pages this script serves.
+  // Torn PDA opens attacks at page.php?sid=attack as well as loader.php?sid=attack.
+  const PAGE_MODE = (() => {
+    if (!/(^|\.)torn\.com$/i.test(location.hostname)) return null;
+    if (location.pathname === '/factions.php') return 'faction';
+    if (/^\/(loader|loader2|page)\.php$/.test(location.pathname)) {
+      const params = new URLSearchParams(location.search);
+      if (params.get('sid') === 'attack' && /^\d+$/.test(params.get('user2ID') || '')) return 'attack';
+    }
+    return null;
+  })();
+  if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0160__';
+  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0170__';
   if (window[INSTANCE_KEY]) {
-    console.warn(`[${SCRIPT}] v0.16.0 is already running; duplicate injection ignored.`);
+    console.warn(`[${SCRIPT}] v0.17.0 is already running; duplicate injection ignored.`);
     return;
   }
   window[INSTANCE_KEY] = true;
 
   const API_BASE = 'https://api.torn.com/v2';
-  const API_COMMENT = 'two-v0.16.0';
+  const API_COMMENT = 'two-v0.17.0';
   const PDA_API_KEY = '###PDA-APIKEY###';
 
   const KEY_STORAGE = 'two.apiKey.v1';
@@ -564,7 +577,7 @@
       : null;
     return {
       script: SCRIPT,
-      version: '0.16.0',
+      version: '0.17.0',
       generatedAt: new Date().toISOString(),
       active: isActiveView(),
       factionId: Number.isFinite(Number(activeFactionId)) ? Number(activeFactionId) : null,
@@ -633,7 +646,7 @@
 
   function showDiagnosticSnapshot() {
     const payload = JSON.stringify(getDiagnosticSnapshot(), null, 2);
-    window.prompt(`${SCRIPT} v0.16.0 diagnostics - copy this text if troubleshooting is needed:`, payload);
+    window.prompt(`${SCRIPT} v0.17.0 diagnostics - copy this text if troubleshooting is needed:`, payload);
     return payload;
   }
 
@@ -2720,6 +2733,7 @@
     for (const userId of rowsByUser.keys()) renderUser(userId);
     lastRenderedTrustState = isLiveStatusTrusted();
     updateTargetToolbars();
+    if (PAGE_MODE === 'attack') renderAttackPanel();
   }
 
   function renderAll() {
@@ -4130,6 +4144,22 @@
       .two-context-chip.two-chip-negative { color:#ffaaa0; border-color:rgba(255,95,78,.55); background:rgba(75,24,18,.5); }
       .two-context-chip.two-chip-urgent { color:#ffe38a; border-color:rgba(255,205,61,.6); background:rgba(83,61,8,.55); }
       .two-context-chip.two-chip-bonus { color:#fff7d1; border-color:rgba(255,224,102,.95); background:rgba(92,70,8,.9); animation:two-chip-pulse 1s ease-in-out infinite alternate; }
+
+      .two-attack-panel { position:fixed; top:calc(env(safe-area-inset-top, 0px) + 54px); right:6px; z-index:99999; max-width:min(92vw,420px); box-sizing:border-box; padding:4px 6px; border-radius:6px; border:1px solid rgba(255,255,255,.18); background:rgba(24,24,24,.94); color:#ddd; font:700 10px/1.3 Arial,sans-serif; box-shadow:0 2px 10px rgba(0,0,0,.5); pointer-events:auto; }
+      .two-attack-panel[hidden] { display:none !important; }
+      .two-attack-head { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+      .two-attack-name { color:#fff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:40vw; }
+      .two-attack-panel .two-intel-badge { font-size:9px; pointer-events:none; }
+      .two-attack-status { white-space:nowrap; padding:2px 5px; border-radius:3px; border:1px solid rgba(255,255,255,.16); background:rgba(0,0,0,.25); font-variant-numeric:tabular-nums; }
+      .two-attack-status-okay { color:#c9ffa0; border-color:rgba(137,255,67,.5); background:rgba(37,70,17,.5); }
+      .two-attack-status-hospital { color:#ff9b8f; border-color:rgba(255,95,78,.55); background:rgba(35,15,13,.7); }
+      .two-attack-status-soon { color:#ffd36a; border-color:rgba(255,193,64,.8); background:rgba(55,40,10,.86); }
+      .two-attack-status-due { color:#c6ff84; border-color:rgba(123,255,74,.95); background:rgba(36,72,10,.9); }
+      .two-attack-status-away { color:#bfc8d0; }
+      .two-attack-toggle { appearance:none; -webkit-appearance:none; width:20px; height:20px; margin:0; padding:0; border-radius:50%; border:1px solid rgba(255,255,255,.25); background:rgba(255,255,255,.08); color:#ddd; font:800 11px/1 Arial,sans-serif; cursor:pointer; touch-action:manipulation; }
+      .two-attack-detail { margin-top:4px; padding-top:4px; border-top:1px solid rgba(255,255,255,.12); font-weight:400; font-size:10px; color:#ccc; max-height:40vh; overflow:auto; }
+      .two-attack-detail div { padding:1px 0; }
+      .two-attack-detail div:first-child { color:#fff; font-weight:700; }
       @keyframes two-chip-pulse { from{box-shadow:0 0 0 rgba(255,214,64,0)} to{box-shadow:0 0 6px rgba(255,214,64,.7)} }
       .two-age-badge { position:relative; pointer-events:none; white-space:nowrap; box-sizing:border-box; padding:1px 3px; border-radius:3px; border:1px solid rgba(255,255,255,.20); background:rgba(18,18,18,.78); color:#dedede; font:700 8px/1.15 Arial,sans-serif; letter-spacing:-.1px; box-shadow:0 1px 2px rgba(0,0,0,.35); }
       .two-activity-badge { position:relative; pointer-events:none; white-space:nowrap; box-sizing:border-box; padding:1px 3px; border-radius:3px; border:1px solid rgba(255,255,255,.15); background:rgba(18,18,18,.70); color:#aaa; font:700 7px/1.15 Arial,sans-serif; font-variant-numeric:tabular-nums; box-shadow:0 1px 2px rgba(0,0,0,.28); }
@@ -4507,6 +4537,249 @@
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Attack page (v0.17): carry the verdict, EV, hospital countdown and chain state to the moment of the decision.
+  // Floating, compact, never covering the fight controls; details expand on tap because mobile has no hover.
+  // Only API data and the user's own local memory are used; nothing is scraped from the attack page itself.
+  // ---------------------------------------------------------------------------
+
+  const ATTACK_PAGE_STATUS_ACTIVE_MS = 10_000;
+  const ATTACK_PAGE_STATUS_IDLE_MS = 30_000;
+  let attackTargetId = null;
+  let attackTargetProfile = null; // { name, level, status }
+  let attackPanel = null;
+  let attackPanelExpanded = false;
+  let attackStatusTimer = null;
+  let attackTickTimer = null;
+  let attackStatusInFlight = null;
+  let attackStatusLastAt = 0;
+  let attackPanelHidden = false;
+
+  function attackTargetSecondsLeft() {
+    const until = getStatusUntil(attackTargetProfile?.status);
+    return until === null ? null : Math.ceil(until - serverNowSec());
+  }
+
+  function attackStatusRefreshMs() {
+    const state = String(attackTargetProfile?.status?.state || '').toLowerCase();
+    const seconds = attackTargetSecondsLeft();
+    if (state === 'hospital' && Number.isFinite(seconds) && seconds <= 5 * 60) return ATTACK_PAGE_STATUS_ACTIVE_MS;
+    if (state === 'okay') return ATTACK_PAGE_STATUS_ACTIVE_MS;
+    return ATTACK_PAGE_STATUS_IDLE_MS;
+  }
+
+  // On the attack page only true backgrounding pauses work: a desktop focus loss (alt-tab, devtools) keeps the page
+  // visible, and the panel must keep counting down for when the user comes back.
+  function attackPageVisible() {
+    return !document.hidden && !attackPanelHidden;
+  }
+
+  async function refreshAttackTargetStatus() {
+    if (!attackTargetId || !apiKey || apiPermanentlyDisabled || !attackPageVisible()) return;
+    if (attackStatusInFlight) return attackStatusInFlight;
+    if (Date.now() < globalBackoffUntil) { scheduleAttackStatusRefresh(Math.max(1_000, globalBackoffUntil - Date.now() + 250)); return; }
+    const flight = (async () => {
+      try {
+        const before = monotonicNowMs();
+        const data = await apiGet(`/user/${attackTargetId}/basic`, { cacheBust: true });
+        const profile = data?.profile;
+        if (!profile) throw new ApiError('Target profile missing from API response.');
+        attackTargetProfile = {
+          name: typeof profile.name === 'string' ? profile.name : '',
+          level: Number.isFinite(Number(profile.level)) ? Number(profile.level) : null,
+          status: profile.status || null,
+        };
+        if (attackTargetProfile.level) memberMetaByUser.set(attackTargetId, { ...(memberMetaByUser.get(attackTargetId) || {}), level: attackTargetProfile.level, name: attackTargetProfile.name });
+        attackStatusLastAt = before;
+        registerApiSuccess();
+        // Chain state is throttled to 30 s internally; riding the status poll keeps the chip current for teammates' hits.
+        await refreshOwnChain().catch(() => { /* handled inside */ });
+      } catch (err) {
+        if (err?.message !== 'API backoff active.') {
+          registerApiFailure(err);
+          console.warn(`[${SCRIPT}] Could not refresh attack target status`, err);
+        }
+      } finally {
+        renderAttackPanel();
+      }
+    })().finally(() => {
+      if (attackStatusInFlight === flight) attackStatusInFlight = null;
+      scheduleAttackStatusRefresh();
+    });
+    attackStatusInFlight = flight;
+    return flight;
+  }
+
+  function scheduleAttackStatusRefresh(delayMs = null) {
+    if (attackStatusTimer) clearTimeout(attackStatusTimer);
+    attackStatusTimer = null;
+    if (!attackTargetId || !attackPageVisible() || apiPermanentlyDisabled) return;
+    const delay = delayMs === null ? attackStatusRefreshMs() : Number(delayMs);
+    attackStatusTimer = setTimeout(() => { attackStatusTimer = null; refreshAttackTargetStatus(); }, Math.max(500, delay));
+  }
+
+  function ensureAttackPanel() {
+    if (attackPanel?.isConnected) return attackPanel;
+    const panel = document.createElement('div');
+    panel.className = 'two-attack-panel';
+    panel.setAttribute('role', 'status');
+    panel.setAttribute('aria-label', 'Torn War Overlay target intel');
+
+    const head = document.createElement('div');
+    head.className = 'two-attack-head';
+    const name = document.createElement('span');
+    name.className = 'two-attack-name';
+    const verdict = document.createElement('span');
+    verdict.className = 'two-intel-badge';
+    verdict.hidden = true;
+    const status = document.createElement('span');
+    status.className = 'two-attack-status';
+    const chain = document.createElement('span');
+    chain.className = 'two-context-chip two-chain-chip';
+    chain.hidden = true;
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'two-attack-toggle';
+    toggle.textContent = 'i';
+    toggle.title = 'Show why';
+    toggle.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      attackPanelExpanded = !attackPanelExpanded;
+      renderAttackPanel();
+    });
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'two-attack-toggle';
+    close.textContent = '×';
+    close.title = 'Hide until the next page load';
+    close.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      attackPanelHidden = true;
+      panel.hidden = true;
+      pauseAttackPage(); // A hidden panel must not keep spending API budget.
+    });
+    head.append(name, verdict, status, chain, toggle, close);
+
+    const detail = document.createElement('div');
+    detail.className = 'two-attack-detail';
+    detail.hidden = true;
+
+    panel.append(head, detail);
+    panel.__twoName = name;
+    panel.__twoVerdict = verdict;
+    panel.__twoStatus = status;
+    panel.__twoChain = chain;
+    panel.__twoDetail = detail;
+    (document.body || document.documentElement).appendChild(panel);
+    attackPanel = panel;
+    return panel;
+  }
+
+  function renderAttackPanel() {
+    if (PAGE_MODE !== 'attack' || !attackTargetId || attackPanelHidden) return;
+    const panel = ensureAttackPanel();
+    const userId = attackTargetId;
+    const profile = attackTargetProfile;
+    const level = profile?.level ?? getBestLevelForUser(userId);
+    panel.__twoName.textContent = profile?.name
+      ? `${profile.name}${Number.isFinite(level) && level !== Number.POSITIVE_INFINITY ? ` [${level}]` : ''}`
+      : `Target ${userId}`;
+
+    renderIntelBadge(panel.__twoVerdict, userId, { ideal: false, good: false });
+
+    const state = String(profile?.status?.state || '').toLowerCase();
+    const seconds = attackTargetSecondsLeft();
+    let statusText = profile ? (profile.status?.state || 'Status ?') : 'Loading…';
+    let statusClass = 'two-attack-status';
+    if (state === 'hospital' && Number.isFinite(seconds)) {
+      statusText = seconds <= 0 ? 'DUE' : `HOSP ${formatClock(seconds)}`;
+      statusClass += seconds <= 0 ? ' two-attack-status-due' : seconds <= 60 ? ' two-attack-status-soon' : ' two-attack-status-hospital';
+    } else if (state === 'okay') {
+      statusText = 'OKAY';
+      statusClass += ' two-attack-status-okay';
+    } else if (state === 'traveling' || state === 'abroad') {
+      statusText = profile.status.description || state.toUpperCase();
+      statusClass += ' two-attack-status-away';
+    } else if (state === 'jail' && Number.isFinite(seconds)) {
+      statusText = `JAIL ${formatClock(Math.max(0, seconds))}`;
+      statusClass += ' two-attack-status-away';
+    }
+    const ageSec = attackStatusLastAt > 0 ? Math.floor((monotonicNowMs() - attackStatusLastAt) / 1000) : null;
+    panel.__twoStatus.textContent = statusText;
+    panel.__twoStatus.className = statusClass;
+    panel.__twoStatus.title = ageSec === null ? 'Waiting for the first status check' : `Status from the Torn API ${ageSec}s ago`;
+
+    renderChainChip(panel.__twoChain);
+
+    const detail = panel.__twoDetail;
+    detail.hidden = !attackPanelExpanded;
+    if (attackPanelExpanded) {
+      const intel = intelEnabled() ? getOpponentIntel(userId) : null;
+      const lines = intel ? describeIntel(intel, userId).split(' | ') : ['Personal intel is turned off in SET on the faction page.'];
+      if (!apiKey) lines.unshift('No API key stored; open the faction page once to set one.');
+      detail.replaceChildren(...lines.map(line => {
+        const row = document.createElement('div');
+        row.textContent = line;
+        return row;
+      }));
+    }
+  }
+
+  function attackPageTick() {
+    attackTickTimer = null;
+    if (!attackPageVisible()) return;
+    renderAttackPanel();
+    attackTickTimer = setTimeout(attackPageTick, 1000);
+  }
+
+  function pauseAttackPage() {
+    if (attackStatusTimer) clearTimeout(attackStatusTimer);
+    attackStatusTimer = null;
+    if (attackTickTimer) clearTimeout(attackTickTimer);
+    attackTickTimer = null;
+  }
+
+  function resumeAttackPage() {
+    if (!attackPageVisible() || PAGE_MODE !== 'attack') return;
+    if (!attackTickTimer) attackPageTick();
+    // pageshow fires on the initial load too; do not double up a poll that is already pending or fresh.
+    const statusAgeMs = attackStatusLastAt > 0 ? monotonicNowMs() - attackStatusLastAt : Number.POSITIVE_INFINITY;
+    if (!attackStatusTimer && !attackStatusInFlight && statusAgeMs >= attackStatusRefreshMs()) refreshAttackTargetStatus();
+    else if (!attackStatusTimer && !attackStatusInFlight) scheduleAttackStatusRefresh(Math.max(500, attackStatusRefreshMs() - statusAgeMs));
+  }
+
+  async function initAttackPage() {
+    attackTargetId = Number(new URLSearchParams(location.search).get('user2ID'));
+    if (!Number.isFinite(attackTargetId) || attackTargetId <= 0) return;
+    renderAttackPanel();
+
+    // Server clock anchor for the hospital countdown; the basic profile carries no timestamp.
+    const clockRequestedAt = monotonicNowMs();
+    apiGet('/faction/timestamp', { cacheBust: true })
+      .then(data => { if (Number.isFinite(Number(data?.timestamp))) syncClockFromTimestamp(Number(data.timestamp), clockRequestedAt, monotonicNowMs()); })
+      .catch(() => { /* Device clock is the fallback. */ });
+
+    // Cheap, cached context: own stats for Fair Fight projection, own public stats for estimates, exact age and public
+    // stats of this one target when not already known. Each is at most one request and most are served from cache.
+    ensurePrimaryKeyInfo().catch(() => { /* optional */ });
+    if (intelEnabled()) {
+      refreshSelfStats().then(() => renderAttackPanel()).catch(() => { /* handled inside */ });
+      refreshOwnProxy().then(() => renderAttackPanel()).catch(() => { /* handled inside */ });
+      if (!getSignedUp(attackTargetId)) fetchProfile(attackTargetId).then(() => renderAttackPanel()).catch(err => console.warn(`[${SCRIPT}] Could not fetch target age`, err));
+      if (!getStrengthProxy(attackTargetId) && !strengthUnsupported) {
+        fetchStrength(attackTargetId).then(() => renderAttackPanel()).catch(err => console.warn(`[${SCRIPT}] Could not fetch target public stats`, err));
+      }
+    }
+
+    resumeAttackPage();
+    document.addEventListener('visibilitychange', () => { if (attackPageVisible()) resumeAttackPage(); else pauseAttackPage(); });
+    window.addEventListener('focus', () => resumeAttackPage());
+    window.addEventListener('pagehide', () => { pauseAttackPage(); flushPersistentState(); });
+    window.addEventListener('pageshow', () => resumeAttackPage());
+  }
+
   async function init() {
     injectStyles();
     prunePersistentCaches();
@@ -4516,9 +4789,15 @@
     attackApiKey = getStoredAttackApiKey();
 
     if (!apiKey) {
-      if (!isPdaKey(PDA_API_KEY)) setManualApiKey();
+      // The key prompt lives on the faction page; the attack page never interrupts a fight with a dialog.
+      if (PAGE_MODE === 'faction' && !isPdaKey(PDA_API_KEY)) setManualApiKey();
       apiKey = getStoredApiKey();
       if (!apiKey) return;
+    }
+
+    if (PAGE_MODE === 'attack') {
+      await initAttackPage();
+      return;
     }
 
     installNavigationHooks();

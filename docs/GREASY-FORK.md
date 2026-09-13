@@ -20,13 +20,16 @@ Keep the existing namespace stable so userscript managers recognise updates corr
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.16.0
+// @version      0.17.0
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
 // @homepageURL  https://github.com/JarbasFerro/torn-war-overlay
 // @supportURL   https://github.com/JarbasFerro/torn-war-overlay/issues
 // @match        https://www.torn.com/factions.php*
+// @match        https://www.torn.com/loader.php?sid=attack*
+// @match        https://www.torn.com/loader2.php?sid=attack*
+// @match        https://www.torn.com/page.php?sid=attack*
 // @connect      api.torn.com
 // @grant        GM_xmlhttpRequest
 // @grant        GM_registerMenuCommand
@@ -69,6 +72,7 @@ The following is ready to paste into the Greasy Fork description field.
   <li>Personal intel per opponent learned from your own attacks: observed Fair Fight, expected score per hit, <code>EV</code> per 25 energy and a <code>PROVEN | LIKELY | UNKNOWN | RISK | CHANGED</code> confidence label with an explanation on tap/hover.</li>
   <li>A single <code>★ BEST</code> recommendation among current green targets; switches to the safest proven target when your next chain hit is a bonus hit.</li>
   <li><code>WAR</code> and <code>CHAIN</code> context chips: score lead versus target, next target-decay time, chain count and timer, bonus-hit warning.</li>
+  <li>The same verdict, EV, hospital countdown and chain state in a small floating panel on the attack page, with a tap-to-expand explanation.</li>
   <li>Adaptive API polling, caching and incremental attack-history updates to reduce unnecessary API usage.</li>
 </ul>
 
@@ -205,4 +209,4 @@ Before the first public release:
 
 **v0.13.1 was the first Greasy Fork publication candidate.** It is the v0.13 release-candidate code with finalized distribution metadata and a canonical GitHub source file; no tactical behavior was changed for this distribution release.
 
-**v0.14.0** added personal intel and the ToS disclosure table above; **v0.15.0** added match verdicts; **v0.16.0** rebuilt the verdict estimate on Torn's gym formula with self-calibration. Publish only after a real ranked-war validation pass on Torn PDA, and paste the updated description (including the ToS table) into the listing when the version is synced.
+**v0.14.0** added personal intel and the ToS disclosure table above; **v0.15.0** added match verdicts; **v0.16.0** rebuilt the verdict estimate on Torn's gym formula with self-calibration; **v0.17.0** adds the attack-page panel. Publish only after a real ranked-war validation pass on Torn PDA, and paste the updated description (including the ToS table) into the listing when the version is synced.

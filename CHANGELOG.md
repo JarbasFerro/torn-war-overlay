@@ -4,6 +4,14 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.17.0 - Attack page continuity
+
+- The script now also runs on the attack page (`loader.php`, `loader2.php` and `page.php` with `sid=attack`, covering Torn PDA's attack URL) and shows a compact floating panel: target name and level, the same `EASY | GOOD | RISKY | AVOID` verdict and `EV`, a live hospital countdown or `OKAY` status, and your chain count/timer with the bonus-hit warning.
+- Tap the `i` button for the full explanation in words (mobile has no hover); `×` hides the panel until the next page load.
+- Data comes only from the Torn API and your local memory: one status check every 10 to 30 seconds while the page is visible, the cached chain state, and a one-off age and public-stats lookup for this target if they are not already known. Nothing is scraped from the attack page and nothing runs while the page is hidden.
+- The attack page never prompts for an API key; set it once on the faction page.
+- The smoke harness now boots faction, attack and unrelated pages.
+
 ## 0.16.0 - Calibrated strength model
 
 - Rebuilt the public-stats strength estimate on Torn's gym formula: stats grow exponentially with gym energy up to the 50M-per-stat cap and roughly linearly after it. The old square-root-of-energy proxy is gone.
