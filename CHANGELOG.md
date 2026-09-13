@@ -4,6 +4,16 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.16.0 - Calibrated strength model
+
+- Rebuilt the public-stats strength estimate on Torn's gym formula: stats grow exponentially with gym energy up to the 50M-per-stat cap and roughly linearly after it. The old square-root-of-energy proxy is gone.
+- Counted natural energy regeneration (about 480 per active day, more for donators) and subtracted energy spent on attacks and revives. This fixes the v0.15 misread where an old, active account with few xanax could show as `~EASY`.
+- Fetch the exact account age of every enemy member once (cold queue, one request per member ever) so the natural-energy term is correct; activity time stands in while it loads.
+- Compare against your real battle stats when the key allows it, otherwise against your own public stats and account age.
+- Self-calibration: every real fight gives an observed strength for a player whose public stats are cached; the median correction is applied once three fights exist and is shown in diagnostics and the tooltip.
+- Estimates now carry a plausible range. The tooltip shows it, and a verdict is withheld as `?` when the range spans every tier.
+- Tooltip explains the estimate in words: estimated total stats, gym energy breakdown (items, natural, spent), and what it was compared against.
+
 ## 0.15.0 - Match verdicts
 
 - Added a plain-language match verdict on every enemy row: `EASY`, `GOOD`, `RISKY` or `AVOID`, with a tap/hover explanation in words ("the sweet spot: good respect per hit and you should still win").

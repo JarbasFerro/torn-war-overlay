@@ -61,7 +61,9 @@ In Torn a fight is decided almost entirely by battle stats, not by level or acco
 | `RISKY` | about 35% to 70% | Maximum respect, but a real chance of losing. |
 | `AVOID` | above about 70%, or you lost to them recently | Do not spend energy here. |
 
-A `~` in front (and a dashed border) means the verdict is an estimate from public stats. Torn publishes every player's lifetime xanax, energy refills and energy drinks, which is a fair proxy for how much gym training they have done. The script compares that with your own numbers. Once you have actually fought someone the estimate is replaced by the real Fair Fight and your win/loss record against them, and the `~` disappears. Tap or hover the badge for the reasons in plain words.
+A `~` in front (and a dashed border) means the verdict is an estimate from public stats. Torn publishes every player's lifetime xanax, energy refills, energy drinks, boosters, attacks and activity time. The script adds up the energy that plausibly went into the gym (items plus natural regeneration over the account's active days, minus attacks), converts it to total stats using Torn's gym formula (exponential growth up to the 50M-per-stat cap, roughly linear after), and compares the result with your own stats. The tooltip shows the estimated total, the energy breakdown and a plausible range. When the range spans every tier the badge shows `?` instead of guessing.
+
+Every real fight sharpens the estimates: Torn's Fair Fight value reveals the opponent's true strength, and after three such fights the script fits a correction factor for all remaining estimates. Once you have fought someone the estimate is replaced by the real Fair Fight and your win/loss record against them, and the `~` disappears. Tap or hover the badge for the reasons in plain words.
 
 `★ BEST` marks the green target that gives the most expected score for your next 25 energy, and it never picks a `RISKY` or `AVOID` opponent.
 
@@ -153,11 +155,11 @@ Do **not** post API keys in an issue.
 
 ## Development status
 
-Current release candidate: **v0.15.0**.
+Current release candidate: **v0.16.0**.
 
-v0.15.0 adds plain-language match verdicts on top of v0.14.0's personal tactical intelligence. The green/yellow targeting path is unchanged since v0.13.1 apart from the null-timer fix and API-sourced levels.
+v0.16.0 replaces the v0.15 strength estimate with a model built on Torn's gym formula, natural energy and self-calibration from real fights. The green/yellow targeting path is unchanged since v0.13.1 apart from the null-timer fix and API-sourced levels; old members now show their exact age instead of `>=1.5y`.
 
-The v0.13 line was validated in real ranked-war use. v0.14 and v0.15 need the same real-war validation before promotion; the roadmap lists the questions to answer.
+The v0.13 line was validated in real ranked-war use. v0.14 to v0.16 need the same real-war validation before promotion; `docs/RESEARCH-2026-09-13.md` explains the model and lists what to check.
 
 ## Disclaimer
 
