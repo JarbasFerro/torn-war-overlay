@@ -10,7 +10,8 @@ The script is designed primarily for **Torn PDA** and also supports standard use
 - Activity context such as Online, Idle and Offline with recency.
 - Server-synchronised hospital countdowns.
 - Configurable green/yellow target highlighting.
-- `ALL | TARGETS | SET` controls directly above the faction member list.
+- `ALL | TARGETS | FILT | SET` controls directly above the faction member list, with persistent filter chips for match verdict, status, activity and minimum `EV`.
+- `OUT EARLY` label for five minutes when a member leaves hospital well before their timer.
 - Optional maximum level and Idle-target rules.
 - Early Discharge and revive-risk context.
 - Up to five recent outgoing attack-result dots per opponent, scoped to the current ranked war.
@@ -156,9 +157,9 @@ Do **not** post API keys in an issue.
 
 ## Development status
 
-Current release candidate: **v0.17.0**.
+Current release candidate: **v0.18.0**.
 
-v0.17.0 carries the verdict, expected value, hospital countdown and chain state onto the attack page. v0.16.0 replaced the v0.15 strength estimate with a model built on Torn's gym formula, natural energy and self-calibration from real fights. The green/yellow targeting path is unchanged since v0.13.1 apart from the null-timer fix and API-sourced levels; old members now show their exact age instead of `>=1.5y`.
+v0.18.0 adds list filters and `OUT EARLY` labels. v0.17.0 carries the verdict, expected value, hospital countdown and chain state onto the attack page. v0.16.0 replaced the v0.15 strength estimate with a model built on Torn's gym formula, natural energy and self-calibration from real fights. The green/yellow targeting path is unchanged since v0.13.1 apart from the null-timer fix and API-sourced levels; old members now show their exact age instead of `>=1.5y`.
 
 The v0.13 line was validated in real ranked-war use. v0.14 to v0.16 need the same real-war validation before promotion; `docs/RESEARCH-2026-09-13.md` explains the model and lists what to check.
 

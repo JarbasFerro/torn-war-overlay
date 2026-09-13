@@ -4,6 +4,11 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.18.0 - Filters and early-exit labels
+
+- Added a `FILT` button that opens a row of filter chips above the member list: match verdict (`EASY GOOD RISKY AVOID ?`), status (`OKAY HOSP AWAY`), activity (`ON IDLE OFF`) and a minimum `EV` (`ANY 2+ 4+ 6+`). Tap a chip to hide those rows; a lit chip is shown, a struck-through chip is hidden; `RESET` shows everything. Filters persist and apply in both `ALL` and `TARGETS` modes. A fact the script does not know never hides a row.
+- Added `OUT EARLY`: when a member leaves hospital at least a minute before their timer (medical item, revive, Early Discharge), the hospital badge shows `OUT EARLY` for five minutes with the lead time in the tooltip. Detected from consecutive API snapshots and from the visible page, only while the page is active.
+
 ## 0.17.0 - Attack page continuity
 
 - The script now also runs on the attack page (`loader.php`, `loader2.php` and `page.php` with `sid=attack`, covering Torn PDA's attack URL) and shows a compact floating panel: target name and level, the same `EASY | GOOD | RISKY | AVOID` verdict and `EV`, a live hospital countdown or `OKAY` status, and your chain count/timer with the bonus-hit warning.

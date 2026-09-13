@@ -20,7 +20,7 @@ Keep the existing namespace stable so userscript managers recognise updates corr
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.17.0
+// @version      0.18.0
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -63,7 +63,8 @@ The following is ready to paste into the Greasy Fork description field.
   <li>Online / Idle / Offline activity context with recency.</li>
   <li>Server-synchronised hospital countdowns.</li>
   <li>Configurable green and yellow target highlighting.</li>
-  <li><code>ALL | TARGETS | SET</code> controls directly above the faction member list.</li>
+  <li><code>ALL | TARGETS | FILT | SET</code> controls directly above the faction member list, with persistent filter chips for match verdict, status, activity and minimum EV.</li>
+  <li><code>OUT EARLY</code> label for five minutes when a member leaves hospital well before their timer.</li>
   <li>Optional maximum level.</li>
   <li>Option to include or exclude Idle players from target selection.</li>
   <li>Early Discharge and revive-risk context.</li>
@@ -209,4 +210,4 @@ Before the first public release:
 
 **v0.13.1 was the first Greasy Fork publication candidate.** It is the v0.13 release-candidate code with finalized distribution metadata and a canonical GitHub source file; no tactical behavior was changed for this distribution release.
 
-**v0.14.0** added personal intel and the ToS disclosure table above; **v0.15.0** added match verdicts; **v0.16.0** rebuilt the verdict estimate on Torn's gym formula with self-calibration; **v0.17.0** adds the attack-page panel. Publish only after a real ranked-war validation pass on Torn PDA, and paste the updated description (including the ToS table) into the listing when the version is synced.
+**v0.14.0** added personal intel and the ToS disclosure table above; **v0.15.0** added match verdicts; **v0.16.0** rebuilt the verdict estimate on Torn's gym formula with self-calibration; **v0.17.0** adds the attack-page panel; **v0.18.0** adds filters and OUT EARLY labels. Publish only after a real ranked-war validation pass on Torn PDA, and paste the updated description (including the ToS table) into the listing when the version is synced.

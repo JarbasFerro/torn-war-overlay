@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.17.0
+// @version      0.18.0
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -34,15 +34,15 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0170__';
+  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0180__';
   if (window[INSTANCE_KEY]) {
-    console.warn(`[${SCRIPT}] v0.17.0 is already running; duplicate injection ignored.`);
+    console.warn(`[${SCRIPT}] v0.18.0 is already running; duplicate injection ignored.`);
     return;
   }
   window[INSTANCE_KEY] = true;
 
   const API_BASE = 'https://api.torn.com/v2';
-  const API_COMMENT = 'two-v0.17.0';
+  const API_COMMENT = 'two-v0.18.0';
   const PDA_API_KEY = '###PDA-APIKEY###';
 
   const KEY_STORAGE = 'two.apiKey.v1';
@@ -142,8 +142,17 @@
     maxLevel: null,
     allowIdle: true,
     showIntel: true,
+    filters: { verdicts: [], statuses: [], activity: [], minEv: 0 }, // Arrays hold the *excluded* values so a fresh install shows everything.
+    filterBarOpen: false,
     diagnosticMode: false,
   });
+
+  const FILTER_VERDICTS = Object.freeze(['EASY', 'GOOD', 'RISKY', 'AVOID', '?']);
+  const FILTER_STATUSES = Object.freeze(['okay', 'hospital', 'away']);
+  const FILTER_ACTIVITY = Object.freeze(['online', 'idle', 'offline']);
+  const FILTER_MIN_EV_OPTIONS = Object.freeze([0, 2, 4, 6]);
+  const EARLY_EXIT_DISPLAY_MS = 5 * 60_000;
+  const EARLY_EXIT_MIN_LEAD_SEC = 60;
 
   let apiKey = null;
   let attackApiKey = null;
@@ -245,6 +254,7 @@
   const lastHospitalDisplayByUser = new Map();
   const lastActivityDisplayByUser = new Map();
   const domStatusOverrideByUser = new Map(); // Focused-page status evidence; never persisted.
+  const earlyExitByUser = new Map(); // userId -> { at, leadSec, source } when a member left hospital well before their timer.
   const attackHistoryByUser = new Map(); // defenderId -> newest-first recent outgoing attack results.
   const lastRenderedSignatureByUser = new Map();
 
@@ -374,8 +384,95 @@
       maxLevel,
       allowIdle: source.allowIdle !== undefined ? Boolean(source.allowIdle) : DEFAULT_SETTINGS.allowIdle,
       showIntel: source.showIntel !== undefined ? Boolean(source.showIntel) : DEFAULT_SETTINGS.showIntel,
+      filters: sanitizeFilters(source.filters),
+      filterBarOpen: Boolean(source.filterBarOpen),
       diagnosticMode: false,
     };
+  }
+
+  function sanitizeFilters(raw) {
+    const source = raw && typeof raw === 'object' ? raw : {};
+    const pick = (values, allowed) => (Array.isArray(values) ? values.filter(value => allowed.includes(value)) : []);
+    const minEvRaw = Number(source.minEv);
+    return {
+      verdicts: pick(source.verdicts, FILTER_VERDICTS),
+      statuses: pick(source.statuses, FILTER_STATUSES),
+      activity: pick(source.activity, FILTER_ACTIVITY),
+      minEv: FILTER_MIN_EV_OPTIONS.includes(minEvRaw) ? minEvRaw : 0,
+    };
+  }
+
+  function currentFilters() {
+    return settings?.filters || DEFAULT_SETTINGS.filters;
+  }
+
+  function filtersActive(filters = currentFilters()) {
+    return filters.verdicts.length > 0 || filters.statuses.length > 0 || filters.activity.length > 0 || filters.minEv > 0;
+  }
+
+  function filtersSignature(filters = currentFilters()) {
+    return `${filters.verdicts.join(',')}|${filters.statuses.join(',')}|${filters.activity.join(',')}|${filters.minEv}`;
+  }
+
+  function statusClassForState(state) {
+    const value = String(state || '').toLowerCase();
+    if (!value) return null;
+    if (value === 'okay') return 'okay';
+    if (value === 'hospital') return 'hospital';
+    return 'away';
+  }
+
+  // Pure filter check: unknown facts never hide a row, only known ones that the user excluded.
+  function passesFilterSpec(filters, { statusClass = null, activity = null, verdict = null, verdictKnown = false, ev = null } = {}) {
+    if (statusClass && filters.statuses.includes(statusClass)) return false;
+    if (activity && filters.activity.includes(activity)) return false;
+    if (verdictKnown) {
+      const key = verdict === null ? '?' : verdict;
+      if (filters.verdicts.includes(key)) return false;
+    }
+    if (filters.minEv > 0 && Number.isFinite(Number(ev)) && ev !== null && Number(ev) < filters.minEv) return false;
+    return true;
+  }
+
+  function rowPassesFilters(userId, target, intel = null) {
+    const filters = currentFilters();
+    if (!filtersActive(filters)) return true;
+    const intelKnown = intelEnabled() && intel !== null;
+    return passesFilterSpec(filters, {
+      statusClass: statusClassForState(target?.state),
+      activity: ['online', 'idle', 'offline'].includes(target?.activity) ? target.activity : null,
+      verdict: intelKnown ? intel.verdict : null,
+      verdictKnown: intelKnown,
+      ev: intelKnown ? intel.ev : null,
+    });
+  }
+
+  function toggleFilterValue(group, value) {
+    const filters = sanitizeFilters(currentFilters());
+    const list = filters[group];
+    if (!Array.isArray(list)) return;
+    const index = list.indexOf(value);
+    if (index >= 0) list.splice(index, 1);
+    else list.push(value);
+    settings.filters = filters;
+    saveSettings();
+    lastRenderedSignatureByUser.clear();
+    renderAll();
+  }
+
+  function setMinEvFilter(value) {
+    const filters = sanitizeFilters({ ...currentFilters(), minEv: value });
+    settings.filters = filters;
+    saveSettings();
+    lastRenderedSignatureByUser.clear();
+    renderAll();
+  }
+
+  function clearFilters() {
+    settings.filters = sanitizeFilters(null);
+    saveSettings();
+    lastRenderedSignatureByUser.clear();
+    renderAll();
   }
 
   function intelEnabled() {
@@ -431,6 +528,7 @@
     const allowIdle = window.confirm(`${SCRIPT}: should Idle players count as targets?\n\nOK = yes\nCancel = no`);
     const showIntel = window.confirm(`${SCRIPT}: show match verdicts and personal intel (EASY/GOOD/RISKY/AVOID, expected score, BEST target)?\n\nOK = yes\nCancel = no`);
     const next = sanitizeSettings({
+      ...current, // Filters and the filter-bar state live in settings too; the dialog must not wipe them.
       maxAgeYears: Number(ageRaw),
       greenHospitalSec: Number(greenRaw),
       yellowHospitalSec: Number(yellowRaw),
@@ -577,7 +675,7 @@
       : null;
     return {
       script: SCRIPT,
-      version: '0.17.0',
+      version: '0.18.0',
       generatedAt: new Date().toISOString(),
       active: isActiveView(),
       factionId: Number.isFinite(Number(activeFactionId)) ? Number(activeFactionId) : null,
@@ -646,7 +744,7 @@
 
   function showDiagnosticSnapshot() {
     const payload = JSON.stringify(getDiagnosticSnapshot(), null, 2);
-    window.prompt(`${SCRIPT} v0.17.0 diagnostics - copy this text if troubleshooting is needed:`, payload);
+    window.prompt(`${SCRIPT} v0.18.0 diagnostics - copy this text if troubleshooting is needed:`, payload);
     return payload;
   }
 
@@ -2083,9 +2181,10 @@
       const intel = getOpponentIntel(userId);
       if (intel.ev === null || !(intel.label === 'PROVEN' || intel.label === 'LIKELY')) continue;
       // Never recommend a fight the verdict itself calls risky, whatever the win record says,
-      // nor one whose estimate was withheld as too uncertain.
+      // nor one whose estimate was withheld as too uncertain, nor a row the user has filtered out of view.
       if (intel.verdict !== null && intel.verdict !== 'EASY' && intel.verdict !== 'GOOD') continue;
       if (intel.verdict === null && intel.ratioSource === 'proxy') continue;
+      if (!rowPassesFilters(userId, target, intel)) continue;
       // During a bonus hit the priority is securing it, so rank by win confidence first.
       const rank = bonusNext ? [intel.winProb, intel.ev] : [intel.ev, intel.winProb];
       const better = !best
@@ -2250,7 +2349,77 @@
     const allButton = makeButton('ALL', 'Show all faction members', () => { filterMode = 'all'; renderAll(); });
     const targetButton = makeButton('TARGETS', 'Show only green and yellow targets', () => { filterMode = 'targets'; renderAll(); });
     const settingsButton = makeButton('SET', 'Configure target rules', openSettingsDialog);
-    modeGroup.append(allButton, targetButton, settingsButton);
+    const filterButton = makeButton('FILT', 'Show or hide the row filters', () => {
+      settings.filterBarOpen = !settings.filterBarOpen;
+      saveSettings();
+      updateTargetToolbars();
+    });
+    modeGroup.append(allButton, targetButton, filterButton, settingsButton);
+
+    // Filter bar: a second toolbar row of toggle chips. A lit chip is shown; a dim chip is hidden. Unknown facts never hide a row.
+    const filterBar = document.createElement('div');
+    filterBar.className = 'two-filter-bar';
+    filterBar.hidden = true;
+    const chips = [];
+    function addGroup(labelText, group, values, labels) {
+      const wrap = document.createElement('div');
+      wrap.className = 'two-filter-group';
+      const label = document.createElement('span');
+      label.className = 'two-filter-label';
+      label.textContent = labelText;
+      wrap.appendChild(label);
+      values.forEach((value, index) => {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'two-filter-chip';
+        chip.textContent = labels[index];
+        chip.title = `Show or hide ${labels[index]} rows`;
+        chip.addEventListener('click', event => {
+          event.preventDefault();
+          event.stopPropagation();
+          toggleFilterValue(group, value);
+        });
+        chips.push({ chip, group, value });
+        wrap.appendChild(chip);
+      });
+      filterBar.appendChild(wrap);
+    }
+    addGroup('Match', 'verdicts', FILTER_VERDICTS, ['EASY', 'GOOD', 'RISKY', 'AVOID', '?']);
+    addGroup('Status', 'statuses', FILTER_STATUSES, ['OKAY', 'HOSP', 'AWAY']);
+    addGroup('Activity', 'activity', FILTER_ACTIVITY, ['ON', 'IDLE', 'OFF']);
+    const evWrap = document.createElement('div');
+    evWrap.className = 'two-filter-group';
+    const evLabel = document.createElement('span');
+    evLabel.className = 'two-filter-label';
+    evLabel.textContent = 'Min EV';
+    evWrap.appendChild(evLabel);
+    const evChips = [];
+    for (const value of FILTER_MIN_EV_OPTIONS) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'two-filter-chip';
+      chip.textContent = value === 0 ? 'ANY' : `${value}+`;
+      chip.title = value === 0 ? 'No minimum expected value' : `Hide rows whose expected value is known and below ${value}`;
+      chip.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        setMinEvFilter(value);
+      });
+      evChips.push({ chip, value });
+      evWrap.appendChild(chip);
+    }
+    filterBar.appendChild(evWrap);
+    const resetChip = document.createElement('button');
+    resetChip.type = 'button';
+    resetChip.className = 'two-filter-chip two-filter-reset';
+    resetChip.textContent = 'RESET';
+    resetChip.title = 'Show every row again';
+    resetChip.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      clearFilters();
+    });
+    filterBar.appendChild(resetChip);
 
     const historyKeyButton = document.createElement('button');
     historyKeyButton.type = 'button';
@@ -2306,8 +2475,16 @@
     const right = document.createElement('div');
     right.className = 'two-toolbar-right';
     right.append(historyKeyButton, warChip, chainChip, sync, counter);
-    toolbar.append(modeGroup, right);
+    // The main row stays a single non-wrapping line; the filter bar is a separate full-width row underneath.
+    const mainRow = document.createElement('div');
+    mainRow.className = 'two-toolbar-row';
+    mainRow.append(modeGroup, right);
+    toolbar.append(mainRow, filterBar);
 
+    toolbar.__twoFilterButton = filterButton;
+    toolbar.__twoFilterBar = filterBar;
+    toolbar.__twoFilterChips = chips;
+    toolbar.__twoEvChips = evChips;
     toolbar.__twoWarChip = warChip;
     toolbar.__twoChainChip = chainChip;
     toolbar.__twoAllButton = allButton;
@@ -2451,8 +2628,11 @@
     for (const [userId, rows] of rowsByUser) {
       if (!rows.some(row => row.list === list)) continue;
       const target = getTargetState(userId);
+      if (!target.ideal && !target.good) continue;
+      // Counts describe what is visible: a filtered-out target is not a target the user can act on.
+      if (!rowPassesFilters(userId, target, intelEnabled() ? getOpponentIntel(userId) : null)) continue;
       if (target.ideal) green += 1;
-      else if (target.good) yellow += 1;
+      else yellow += 1;
     }
     return { green, yellow };
   }
@@ -2500,6 +2680,16 @@
       toolbar.__twoAllButton.setAttribute('aria-pressed', String(filterMode === 'all'));
       toolbar.__twoTargetButton.setAttribute('aria-pressed', String(filterMode === 'targets'));
       toolbar.classList.toggle('two-targets-mode', filterMode === 'targets');
+
+      const filters = currentFilters();
+      const active = filtersActive(filters);
+      if (!toolbar.__twoFilterBar) continue; // Toolbar from another script version sharing the expando.
+      toolbar.__twoFilterBar.hidden = !settings.filterBarOpen;
+      toolbar.__twoFilterButton.classList.toggle('two-active', Boolean(settings.filterBarOpen));
+      toolbar.__twoFilterButton.classList.toggle('two-filter-live', active);
+      toolbar.__twoFilterButton.textContent = active ? 'FILT•' : 'FILT';
+      for (const { chip, group, value } of toolbar.__twoFilterChips) chip.classList.toggle('two-active', !filters[group].includes(value));
+      for (const { chip, value } of toolbar.__twoEvChips) chip.classList.toggle('two-active', filters.minEv === value);
 
       const historyKeyButton = toolbar.__twoHistoryKeyButton;
       if (historyKeyButton) historyKeyButton.hidden = attackHistoryFeatureState !== 'unsupported';
@@ -2599,6 +2789,8 @@
     const intel = intelEnabled() ? getOpponentIntel(userId) : null;
     return [
       filterMode,
+      filtersSignature(),
+      (() => { const early = getEarlyExit(userId); return early ? `early:${Math.floor((Date.now() - early.at) / 60_000)}` : ''; })(),
       intel ? `${intel.label}:${intel.verdictLabel}:${intel.evLabel}:${intel.ffLabel}:${intel.wins}-${intel.losses}:${intel.nextHit}:${intel.ratioSource}` : 'nointel',
       bestTargetUserId === userId ? 'best' : '',
       configuredMaxAgeYears(),
@@ -2648,7 +2840,7 @@
       item.li.classList.toggle('two-ideal-soon', target.ideal && (target.leavingHospitalSoon || target.isDue));
       item.li.classList.toggle('two-due-target', target.ideal && target.isDue);
       item.li.classList.toggle('two-dom-ready', target.ideal && target.domConfirmedOkay);
-      item.li.classList.toggle('two-target-hidden', filterMode === 'targets' && !target.ideal && !target.good);
+      item.li.classList.toggle('two-target-hidden', (filterMode === 'targets' && !target.ideal && !target.good) || !rowPassesFilters(userId, target, intelEnabled() ? getOpponentIntel(userId) : null));
       item.li.classList.toggle('two-provisional', !target.statusTrusted);
 
       if (ageBadge) {
@@ -2691,10 +2883,22 @@
       if (!hospBadge) continue;
       const rawUntil = getStatusUntil(rawStatus);
       if (!target.rawIsHospital || target.domConfirmedOkay || rawUntil === null) {
-        hospBadge.hidden = true;
         hospBadge.classList.remove('two-soon', 'two-now', 'two-target-window', 'two-watch-window', 'two-due', 'two-volatile');
+        const earlyExit = getEarlyExit(userId);
+        if (earlyExit && target.state !== 'hospital') {
+          // Left hospital well before the timer: a medical item, revive, Early Discharge or similar. The most time-sensitive fact on the list.
+          hospBadge.hidden = false;
+          hospBadge.textContent = 'OUT EARLY';
+          hospBadge.classList.add('two-out-early');
+          const agoSec = Math.max(0, Math.floor((Date.now() - earlyExit.at) / 1000));
+          hospBadge.title = `Left hospital about ${formatDurationCompact(earlyExit.leadSec)} before the timer (${earlyExit.source === 'dom' ? 'seen on this page' : 'API snapshot'}, ${agoSec < 60 ? 'under a minute' : `${Math.floor(agoSec / 60)} min`} ago).`;
+        } else {
+          hospBadge.hidden = true;
+          hospBadge.classList.remove('two-out-early');
+        }
         continue;
       }
+      hospBadge.classList.remove('two-out-early');
 
       const secondsLeft = target.secondsLeft;
       if (!Number.isFinite(secondsLeft)) {
@@ -2766,6 +2970,14 @@
     }
 
     const renderIds = new Set(pruneDomStatusOverrides());
+
+    // OUT EARLY labels expire after a few minutes.
+    for (const [userId, entry] of earlyExitByUser) {
+      if (Date.now() - entry.at > EARLY_EXIT_DISPLAY_MS) {
+        earlyExitByUser.delete(userId);
+        renderIds.add(userId);
+      }
+    }
 
     // Hospital timers can change every second.
     for (const [userId, status] of statusByUser) {
@@ -2849,6 +3061,26 @@
     return anchor ? getUserIdFromProfileLink(anchor) : null;
   }
 
+  function noteEarlyExit(userId, previousStatus, source) {
+    if (getEarlyExit(userId)) return true; // Keep the first observation and its provenance.
+    const until = getStatusUntil(previousStatus);
+    if (until === null) return false;
+    const leadSec = Math.ceil(until - serverNowSec());
+    if (leadSec < EARLY_EXIT_MIN_LEAD_SEC) return false;
+    earlyExitByUser.set(userId, { at: Date.now(), leadSec, source });
+    return true;
+  }
+
+  function getEarlyExit(userId) {
+    const entry = earlyExitByUser.get(userId);
+    if (!entry) return null;
+    if (Date.now() - entry.at > EARLY_EXIT_DISPLAY_MS) {
+      earlyExitByUser.delete(userId);
+      return null;
+    }
+    return entry;
+  }
+
   function processDomStatusDiv(statusDiv, { renderNow = true } = {}) {
     if (!statusDiv || !isActiveView() || !isLiveStatusTrusted()) return false;
     const userId = getUserIdFromStatusDiv(statusDiv);
@@ -2870,6 +3102,7 @@
     const domState = detectDomStatusState(statusDiv);
     if (domState === 'okay') {
       const changed = !existing || existing.state !== 'okay';
+      if (changed) noteEarlyExit(userId, statusByUser.get(userId), 'dom');
       domStatusOverrideByUser.set(userId, { state: 'okay', observedAt: Date.now() });
       if (changed && renderNow) {
         renderUser(userId);
@@ -3739,6 +3972,7 @@
     lastHospitalDisplayByUser.clear();
     lastActivityDisplayByUser.clear();
     domStatusOverrideByUser.clear();
+    earlyExitByUser.clear();
     attackHistoryByUser.clear();
     lastRenderedSignatureByUser.clear();
     currentWar = null;
@@ -3901,6 +4135,8 @@
         const members = await fetchFactionSnapshot(factionId);
         if (activeFactionId !== factionId) return;
 
+        // Members who were in hospital in the previous trusted snapshot and are not any more, well before their timer, left early.
+        const previousStatuses = factionLiveReady ? new Map(statusByUser) : new Map();
         statusByUser.clear();
         lastActionByUser.clear();
         memberMetaByUser.clear();
@@ -3910,6 +4146,13 @@
           const id = Number(member?.id);
           if (!Number.isFinite(id)) continue;
           if (member?.status) statusByUser.set(id, member.status);
+          const previous = previousStatuses.get(id);
+          const currentState = member?.status ? String(member.status.state || '').toLowerCase() : null;
+          if (currentState === 'hospital') {
+            earlyExitByUser.delete(id); // Back in hospital: any earlier OUT EARLY note is history.
+          } else if (currentState && previous && String(previous.state || '').toLowerCase() === 'hospital') {
+            noteEarlyExit(id, previous, 'api');
+          }
           if (member?.last_action) lastActionByUser.set(id, member.last_action);
           const level = Number(member?.level);
           memberMetaByUser.set(id, {
@@ -4099,6 +4342,17 @@
       .two-mode-btn { appearance:none; -webkit-appearance:none; min-height:22px; margin:0; padding:2px 8px; border:0; border-right:1px solid rgba(255,255,255,.12); border-radius:0; background:transparent; color:#aaa; font:800 9px/1 Arial,sans-serif; letter-spacing:.25px; cursor:pointer; touch-action:manipulation; }
       .two-mode-btn:last-child { border-right:0; }
       .two-mode-btn.two-active { background:rgba(255,255,255,.13); color:#fff; box-shadow:inset 0 -2px 0 rgba(220,220,220,.65); }
+      .two-mode-btn.two-filter-live { color:#ffe38a; }
+      .two-target-toolbar { flex-direction:column; align-items:stretch; }
+      .two-toolbar-row { display:flex; align-items:center; justify-content:space-between; gap:6px; width:100%; min-width:0; }
+      .two-filter-bar { display:flex; flex-wrap:wrap; align-items:center; gap:4px 10px; margin-top:3px; padding-top:3px; border-top:1px solid rgba(255,255,255,.08); }
+      .two-filter-bar[hidden] { display:none !important; }
+      .two-filter-group { display:inline-flex; align-items:center; gap:3px; }
+      .two-filter-label { color:#999; font:800 7px/1 Arial,sans-serif; letter-spacing:.2px; text-transform:uppercase; margin-right:2px; }
+      .two-filter-chip { appearance:none; -webkit-appearance:none; min-height:20px; margin:0; padding:2px 6px; border-radius:10px; border:1px solid rgba(255,255,255,.18); background:rgba(0,0,0,.25); color:#777; font:800 8px/1 Arial,sans-serif; letter-spacing:.2px; cursor:pointer; touch-action:manipulation; text-decoration:line-through; }
+      .two-filter-chip.two-active { color:#eee; background:rgba(255,255,255,.14); border-color:rgba(255,255,255,.35); text-decoration:none; }
+      .two-filter-chip.two-filter-reset { color:#ffe38a; text-decoration:none; border-color:rgba(255,205,61,.5); }
+      .two-hosp-badge.two-out-early { color:#fff7d1; border-color:rgba(255,224,102,.98); background:rgba(92,70,8,.96); min-width:52px; animation:two-chip-pulse 1s ease-in-out infinite alternate; }
       .two-target-toolbar.two-targets-mode .two-mode-btn[data-two-mode='targets'].two-active { color:#eaffd5; background:rgba(58,100,22,.45); box-shadow:inset 0 -2px 0 rgba(137,255,67,.90); }
       .two-toolbar-right { display:inline-flex; align-items:center; gap:8px; min-width:0; flex-wrap:wrap; justify-content:flex-end; }
       .two-history-key-btn { appearance:none; -webkit-appearance:none; margin:0; padding:2px 4px; min-height:18px; border-radius:3px; border:1px solid rgba(255,194,64,.62); background:rgba(83,61,8,.62); color:#ffe38a; font:800 7px/1 Arial,sans-serif; letter-spacing:.1px; cursor:pointer; touch-action:manipulation; }
@@ -4405,6 +4659,20 @@
       if (classifyAttackResult('Assist').kind !== 'stalemate') faults.push('assist mapping');
       if (LOAD_OLD_EXACT_AGES_SLOWLY !== false) faults.push('old-age API suppression'); // Cold age loading is gated on intel being enabled, not on this flag.
       if (getOwnProxyForTest({ xan: 1 }) !== null || getOwnProxyForTest({ xan: 1, activitySec: null }) === null) faults.push('legacy own proxy migration');
+
+      // Filters: excluded values hide known facts only; unknown facts never hide a row.
+      const noFilters = sanitizeFilters(null);
+      if (filtersActive(noFilters) || !passesFilterSpec(noFilters, { statusClass: 'hospital', activity: 'online', verdict: 'AVOID', verdictKnown: true, ev: 1 })) faults.push('filters default pass');
+      const someFilters = sanitizeFilters({ verdicts: ['AVOID', 'bogus'], statuses: ['hospital'], activity: ['online'], minEv: 4 });
+      if (someFilters.verdicts.length !== 1 || someFilters.minEv !== 4 || !filtersActive(someFilters)) faults.push('filters sanitize');
+      if (passesFilterSpec(someFilters, { statusClass: 'hospital' })) faults.push('filters hide status');
+      if (passesFilterSpec(someFilters, { activity: 'online' })) faults.push('filters hide activity');
+      if (passesFilterSpec(someFilters, { verdict: 'AVOID', verdictKnown: true })) faults.push('filters hide verdict');
+      if (!passesFilterSpec(someFilters, { verdict: null, verdictKnown: true })) faults.push('filters keep unknown verdict when ? allowed');
+      if (passesFilterSpec(sanitizeFilters({ verdicts: ['?'] }), { verdict: null, verdictKnown: true })) faults.push('filters hide unknown verdict');
+      if (passesFilterSpec(someFilters, { ev: 3.9 }) || !passesFilterSpec(someFilters, { ev: null }) || !passesFilterSpec(someFilters, { ev: 4 })) faults.push('filters min ev');
+      if (!passesFilterSpec(someFilters, { statusClass: 'okay', activity: 'offline', verdict: 'GOOD', verdictKnown: true, ev: 5 })) faults.push('filters pass known good row');
+      if (statusClassForState('Traveling') !== 'away' || statusClassForState('Okay') !== 'okay' || statusClassForState('') !== null) faults.push('status class mapping');
       if (!(STATUS_REFRESH_ACTIVE_MS <= STATUS_REFRESH_WATCH_MS && STATUS_REFRESH_WATCH_MS <= STATUS_REFRESH_IDLE_MS)) faults.push('adaptive polling order');
       if (!(WATCHDOG_INTERVAL_MS > 0 && WATCHDOG_STALE_GRACE_MS >= 0)) faults.push('watchdog constants');
       if (!(REQUEST_TIMEOUT_MS > STATUS_REFRESH_ACTIVE_MS)) faults.push('request timeout budget');
