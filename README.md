@@ -17,7 +17,8 @@ The script is designed primarily for **Torn PDA** and also supports standard use
 - Up to five recent outgoing attack-result dots per opponent, scoped to the current ranked war.
 - A plain-language match verdict on every row, `EASY | GOOD | RISKY | AVOID`, estimated from public stats before you have fought someone and replaced by real evidence after.
 - Personal intel per opponent: observed Fair Fight, expected score per hit, expected value per 25 energy (`EV`) and a `PROVEN | LIKELY | UNKNOWN | RISK | CHANGED` confidence label.
-- A single `★ BEST` recommendation among current green targets, with a tap/hover explanation.
+- A single `★ BEST` recommendation among current green targets.
+- Tap any row's badges for a bottom sheet with the full explanation, live status, age, activity, this war's results and a link to the attack page (tooltips never show on touch devices).
 - The same verdict, `EV`, hospital countdown, chain state (with a `BONUS #n` warning) and your energy on the attack page itself, in a small floating panel with a tap-to-expand explanation.
 - After each fight the panel shows the result and a `NEXT` link to the best green target on the roster right now.
 - Adaptive API polling, caching, incremental attack-history updates and foreground-only live processing.
@@ -65,7 +66,7 @@ In Torn a fight is decided almost entirely by battle stats, not by level or acco
 
 A `~` in front (and a dashed border) means the verdict is an estimate from public stats. Two independent facts feed it. Torn's public rank name is a deterministic function of level, crimes, networth and battle-stat thresholds, so it decodes into a hard stat band such as `2M-25M`. Within that band the script places the player using the energy that plausibly went into the gym (xanax, refills, drinks, boosters, natural regeneration over the account's active days, minus attacks) converted through Torn's gym formula. The tooltip shows the band, the estimate and the energy breakdown. When the plausible range spans every tier the badge shows `~?` instead of guessing.
 
-Every real fight sharpens the estimates: Torn's Fair Fight value reveals the opponent's true strength, and after three such fights the script fits a correction factor for all remaining estimates. Once you have fought someone the estimate is replaced by the real Fair Fight and your win/loss record against them, and the `~` disappears. Tap or hover the badge for the reasons in plain words.
+Every real fight sharpens the estimates: Torn's Fair Fight value reveals the opponent's true strength, and after three such fights the script fits a correction factor for all remaining estimates. Once you have fought someone the estimate is replaced by the real Fair Fight and your win/loss record against them, and the `~` disappears. Tap the row's badges for the reasons in plain words.
 
 `★ BEST` marks the green target that gives the most expected score for your next 25 energy, and it never picks a `RISKY` or `AVOID` opponent.
 
@@ -157,9 +158,9 @@ Do **not** post API keys in an issue.
 
 ## Development status
 
-Current release candidate: **v0.20.0**.
+Current release candidate: **v0.21.0**.
 
-v0.20.0 captures each fight's result on the attack page and offers the next best target. v0.19.0 bounds every estimate by Torn's rank band and models win probability from the combat formulas. v0.18 added list filters, `OUT EARLY` labels and several live-war fixes. v0.17.0 carries the verdict, expected value, hospital countdown and chain state onto the attack page. v0.16.0 replaced the v0.15 strength estimate with a model built on Torn's gym formula, natural energy and self-calibration from real fights. The green/yellow targeting path is unchanged since v0.13.1 apart from the null-timer fix and API-sourced levels; old members now show their exact age instead of `>=1.5y`.
+v0.21.0 adds the tap-to-explain sheet on the faction list. v0.20.0 captures each fight's result on the attack page and offers the next best target. v0.19.0 bounds every estimate by Torn's rank band and models win probability from the combat formulas. v0.18 added list filters, `OUT EARLY` labels and several live-war fixes. v0.17.0 carries the verdict, expected value, hospital countdown and chain state onto the attack page. v0.16.0 replaced the v0.15 strength estimate with a model built on Torn's gym formula, natural energy and self-calibration from real fights. The green/yellow targeting path is unchanged since v0.13.1 apart from the null-timer fix and API-sourced levels; old members now show their exact age instead of `>=1.5y`.
 
 The v0.13 line was validated in real ranked-war use. v0.14 to v0.16 need the same real-war validation before promotion; `docs/RESEARCH-2026-09-13.md` explains the model and lists what to check.
 

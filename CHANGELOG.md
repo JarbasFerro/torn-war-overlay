@@ -4,6 +4,10 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.21.0 - Tap-to-explain on the faction list
+
+- Tapping the badges on any enemy row opens a bottom sheet with the target's name and level, verdict and `EV`, live status or hospital countdown, whether it is a green or yellow target under your rules, activity, exact age, Early Discharge and revive flags, this war's results against them, the full explanation of the estimate, and an "Open attack page" link. Tooltips never show on touch devices, so this is how Torn PDA users reach the reasons. Tap outside the sheet or `×` to close; it closes automatically when the page goes to the background.
+
 ## 0.20.0 - Fight result capture and next target
 
 - On the attack page the script now reads the fight's finishing line from the log you are looking at (for example "left X on the street (+3.18)") and shows the result immediately as `WIN +3.18`, `LOSS` or `NO RESULT`. The API record is ingested a few seconds later so the opponent's verdict updates before your next fight. Only the page currently being viewed is read; nothing is automated.

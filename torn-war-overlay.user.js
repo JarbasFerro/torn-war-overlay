@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.20.0
+// @version      0.21.0
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -34,15 +34,15 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0200__';
+  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0210__';
   if (window[INSTANCE_KEY]) {
-    console.warn(`[${SCRIPT}] v0.20.0 is already running; duplicate injection ignored.`);
+    console.warn(`[${SCRIPT}] v0.21.0 is already running; duplicate injection ignored.`);
     return;
   }
   window[INSTANCE_KEY] = true;
 
   const API_BASE = 'https://api.torn.com/v2';
-  const API_COMMENT = 'two-v0.20.0';
+  const API_COMMENT = 'two-v0.21.0';
   const PDA_API_KEY = '###PDA-APIKEY###';
 
   const KEY_STORAGE = 'two.apiKey.v1';
@@ -706,7 +706,7 @@
       : null;
     return {
       script: SCRIPT,
-      version: '0.20.0',
+      version: '0.21.0',
       generatedAt: new Date().toISOString(),
       active: isActiveView(),
       factionId: Number.isFinite(Number(activeFactionId)) ? Number(activeFactionId) : null,
@@ -775,7 +775,7 @@
 
   function showDiagnosticSnapshot() {
     const payload = JSON.stringify(getDiagnosticSnapshot(), null, 2);
-    window.prompt(`${SCRIPT} v0.20.0 diagnostics - copy this text if troubleshooting is needed:`, payload);
+    window.prompt(`${SCRIPT} v0.21.0 diagnostics - copy this text if troubleshooting is needed:`, payload);
     return payload;
   }
 
@@ -1265,9 +1265,148 @@
     container = document.createElement('span');
     container.dataset.twoMemberMeta = marker;
     container.className = 'two-member-meta';
-    container.setAttribute('aria-hidden', 'true');
+    container.setAttribute('role', 'button');
+    container.setAttribute('aria-label', 'Show target details');
+    // Mobile has no hover, so the badges themselves open the explanation sheet.
+    container.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      openRowSheet(userId);
+    });
     memberDiv.appendChild(container);
     return container;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Row sheet: the tap-to-explain panel for one enemy row (tooltips never show on touch devices).
+  // ---------------------------------------------------------------------------
+
+  let rowSheet = null;
+  let rowSheetUserId = null;
+
+  function ensureRowSheet() {
+    if (rowSheet?.isConnected) return rowSheet;
+    const backdrop = document.createElement('div');
+    backdrop.className = 'two-sheet-backdrop';
+    backdrop.addEventListener('click', event => {
+      if (event.target === backdrop) closeRowSheet();
+    });
+    const sheet = document.createElement('div');
+    sheet.className = 'two-sheet';
+    sheet.setAttribute('role', 'dialog');
+    sheet.setAttribute('aria-label', 'Target details');
+    const head = document.createElement('div');
+    head.className = 'two-sheet-head';
+    const title = document.createElement('span');
+    title.className = 'two-sheet-title';
+    const verdict = document.createElement('span');
+    verdict.className = 'two-intel-badge';
+    verdict.hidden = true;
+    const status = document.createElement('span');
+    status.className = 'two-attack-status';
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'two-attack-toggle';
+    close.textContent = '×';
+    close.title = 'Close';
+    close.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); closeRowSheet(); });
+    head.append(title, verdict, status, close);
+    const facts = document.createElement('div');
+    facts.className = 'two-sheet-facts';
+    const body = document.createElement('div');
+    body.className = 'two-sheet-body';
+    const actions = document.createElement('div');
+    actions.className = 'two-sheet-actions';
+    const profileLink = document.createElement('a');
+    profileLink.className = 'two-sheet-link';
+    profileLink.textContent = 'Profile';
+    const attack = document.createElement('a');
+    attack.className = 'two-attack-next-link';
+    attack.textContent = 'Open attack page ▸';
+    actions.append(profileLink, attack);
+    sheet.append(head, facts, body, actions);
+    backdrop.appendChild(sheet);
+    backdrop.__twoTitle = title;
+    backdrop.__twoVerdict = verdict;
+    backdrop.__twoStatus = status;
+    backdrop.__twoFacts = facts;
+    backdrop.__twoBody = body;
+    backdrop.__twoAttack = attack;
+    backdrop.__twoProfile = profileLink;
+    (document.body || document.documentElement).appendChild(backdrop);
+    rowSheet = backdrop;
+    return backdrop;
+  }
+
+  function openRowSheet(userId) {
+    rowSheetUserId = Number(userId);
+    const sheet = ensureRowSheet();
+    sheet.hidden = false;
+    // The badge and body are shared across players; forget their memo so a new player always re-renders fully.
+    delete sheet.__twoVerdict.dataset.twoSignature;
+    delete sheet.dataset.twoSignature;
+    renderRowSheet();
+  }
+
+  function closeRowSheet() {
+    rowSheetUserId = null;
+    if (rowSheet) rowSheet.hidden = true;
+  }
+
+  function renderRowSheet() {
+    if (rowSheetUserId === null || !rowSheet || rowSheet.hidden) return;
+    const userId = rowSheetUserId;
+    const sheet = rowSheet;
+    // The list unmounted or the faction changed: the data behind the sheet is gone, so is the sheet.
+    if (!rowsByUser.has(userId)) { closeRowSheet(); return; }
+    const meta = memberMetaByUser.get(userId) || {};
+    const rows = rowsByUser.get(userId) || [];
+    const domName = rows[0]?.anchor?.textContent?.trim() || '';
+    const level = getBestLevelForUser(userId);
+    sheet.__twoTitle.textContent = `${meta.name || domName || `#${userId}`}${Number.isFinite(level) && level !== Number.POSITIVE_INFINITY ? ` [${level}]` : ''}`;
+
+    const target = getTargetState(userId);
+    renderIntelBadge(sheet.__twoVerdict, userId, target);
+
+    let statusText = target.state ? target.state.toUpperCase() : 'STATUS ?';
+    let statusClass = 'two-attack-status';
+    if (target.rawIsHospital && Number.isFinite(target.secondsLeft) && !target.domConfirmedOkay) {
+      statusText = target.isDue ? 'DUE' : `HOSP ${formatClock(target.secondsLeft)}`;
+      statusClass += target.isDue ? ' two-attack-status-due' : target.secondsLeft <= 60 ? ' two-attack-status-soon' : ' two-attack-status-hospital';
+    } else if (target.isOkay) {
+      statusText = 'OKAY';
+      statusClass += ' two-attack-status-okay';
+    } else if (target.state && target.state !== 'okay') {
+      statusClass += ' two-attack-status-away';
+    }
+    sheet.__twoStatus.textContent = statusText;
+    sheet.__twoStatus.className = statusClass;
+
+    const ageInfo = getAgeInfo(userId);
+    const activity = getActivityInfo(userId);
+    const risk = getMemberRiskInfo(userId);
+    const facts = [];
+    facts.push(target.ideal ? 'Green target under your rules' : target.good ? 'Yellow target (leaving hospital soon)' : 'Not a target under your current rules');
+    facts.push(activity.longLabel);
+    facts.push(Number.isFinite(ageInfo.exactYears) ? `Account age ${ageInfo.exactYears.toFixed(2)} years` : ageInfo.hint === 'candidate' ? 'Account age: inside the candidate window, exact age loading' : ageInfo.hint === 'old' ? 'Account age: outside the target window' : 'Account age unknown');
+    if (risk.hasEarlyDischarge) facts.push('Eligible for Early Discharge (may leave hospital early)');
+    if (risk.isRevivable) facts.push(`Revivable (${risk.reviveSetting})`);
+    const early = getEarlyExit(userId);
+    if (early) facts.push(`Left hospital about ${formatDurationCompact(early.leadSec)} early a few minutes ago`);
+    if (bestTargetUserId === userId) facts.unshift(`★ BEST: ${bestTargetReason}`);
+    const history = getAttackHistory(userId).slice(0, ATTACK_RESULTS_LIMIT);
+    if (history.length) facts.push(`This war: ${history.map(item => item.title).join(', ')}`);
+
+    const intel = intelEnabled() ? getOpponentIntel(userId) : null;
+    const lines = intel ? describeIntel(intel, userId).split(' | ') : ['Personal intel is turned off in SET.'];
+    // Rebuild the text only when it changed; a rebuild every second would cancel long-press selection on phones.
+    const signature = `${userId}|${statusText}|${facts.join('\n')}|${lines.join('\n')}`;
+    if (sheet.dataset.twoSignature === signature) return;
+    sheet.dataset.twoSignature = signature;
+    sheet.__twoFacts.replaceChildren(...facts.map(line => { const row = document.createElement('div'); row.textContent = line; return row; }));
+    sheet.__twoBody.replaceChildren(...lines.map(line => { const row = document.createElement('div'); row.textContent = line; return row; }));
+    sheet.__twoAttack.href = `/loader.php?sid=attack&user2ID=${userId}`;
+    sheet.__twoProfile.href = `/profiles.php?XID=${userId}`;
   }
 
   function ensureAgeBadge(memberDiv, userId) {
@@ -3056,6 +3195,7 @@
     lastRenderedTrustState = isLiveStatusTrusted();
     updateTargetToolbars();
     if (PAGE_MODE === 'attack') renderAttackPanel();
+    renderRowSheet();
   }
 
   function renderAll() {
@@ -3127,6 +3267,7 @@
     for (const userId of renderIds) renderUser(userId);
     tightenAdaptiveFactionSchedule();
     updateTargetToolbars();
+    renderRowSheet();
   }
 
   function stopCountdownTimer() {
@@ -4491,7 +4632,7 @@
       ul.members-list li.two-target-hidden { display:none !important; }
       ul.members-list li .member, ul.members-list li .status { position:relative !important; }
 
-      .two-member-meta { position:absolute; right:4px; bottom:2px; z-index:20; display:inline-flex; align-items:center; justify-content:flex-end; gap:2px; max-width:94%; pointer-events:none; white-space:nowrap; }
+      .two-member-meta { position:absolute; right:4px; bottom:2px; z-index:20; display:inline-flex; align-items:center; justify-content:flex-end; gap:2px; max-width:94%; pointer-events:auto; cursor:pointer; touch-action:manipulation; white-space:nowrap; }
       .two-attack-history { display:inline-flex; align-items:center; gap:2px; min-width:0; }
       .two-attack-dot { display:inline-block; width:6px; height:6px; flex:0 0 6px; border-radius:50%; box-shadow:0 0 0 1px rgba(0,0,0,.28), 0 0 3px rgba(0,0,0,.18); }
       .two-attack-dot.two-attack-win { background:#7dff57; }
@@ -4540,6 +4681,18 @@
       .two-attack-next-link { color:#fff7d1; font:800 11px/1.2 Arial,sans-serif; text-decoration:none; padding:3px 8px; border-radius:4px; border:1px solid rgba(255,224,102,.9); background:rgba(92,70,8,.9); touch-action:manipulation; }
       .two-attack-next-none { color:#bbb; font-weight:400; }
       .two-attack-panel .two-attack-next .two-intel-badge { pointer-events:none; }
+      .two-sheet-backdrop { position:fixed; inset:0; z-index:99998; background:rgba(0,0,0,.45); }
+      .two-sheet-backdrop[hidden] { display:none !important; }
+      .two-sheet { position:absolute; left:0; right:0; bottom:0; max-height:72vh; overflow:auto; box-sizing:border-box; padding:10px 12px calc(12px + env(safe-area-inset-bottom, 0px)); border-top:1px solid rgba(255,255,255,.2); border-radius:10px 10px 0 0; background:rgba(26,26,26,.98); color:#ddd; font:400 12px/1.4 Arial,sans-serif; box-shadow:0 -4px 16px rgba(0,0,0,.6); }
+      .two-sheet-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:6px; }
+      .two-sheet-title { color:#fff; font:800 14px/1.2 Arial,sans-serif; flex:1 1 auto; }
+      .two-sheet .two-intel-badge { font-size:10px; pointer-events:none; }
+      .two-sheet-facts { display:flex; flex-direction:column; gap:2px; padding-bottom:6px; border-bottom:1px solid rgba(255,255,255,.12); color:#ccc; }
+      .two-sheet-facts div:first-child { color:#fff7d1; font-weight:700; }
+      .two-sheet-body { padding-top:6px; display:flex; flex-direction:column; gap:3px; }
+      .two-sheet-body div:first-child { color:#fff; font-weight:700; }
+      .two-sheet-actions { margin-top:10px; display:flex; justify-content:flex-start; gap:10px; align-items:center; }
+      .two-sheet-link { color:#bfc8d0; font:700 11px/1.2 Arial,sans-serif; text-decoration:underline; padding:3px 4px; }
       .two-attack-detail { margin-top:4px; padding-top:4px; border-top:1px solid rgba(255,255,255,.12); font-weight:400; font-size:10px; color:#ccc; max-height:40vh; overflow:auto; }
       .two-attack-detail div { padding:1px 0; }
       .two-attack-detail div:first-child { color:#fff; font-weight:700; }
@@ -4708,6 +4861,7 @@
 
   function pauseForegroundWork() {
     incStat('pauseCount');
+    closeRowSheet();
     lifecycleGeneration += 1;
     clearFactionRefreshTimer();
     clearAttackRefreshTimer();
