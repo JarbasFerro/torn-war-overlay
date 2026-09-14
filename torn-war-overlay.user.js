@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.18.4
+// @version      0.19.0
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -34,15 +34,15 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0184__';
+  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0190__';
   if (window[INSTANCE_KEY]) {
-    console.warn(`[${SCRIPT}] v0.18.4 is already running; duplicate injection ignored.`);
+    console.warn(`[${SCRIPT}] v0.19.0 is already running; duplicate injection ignored.`);
     return;
   }
   window[INSTANCE_KEY] = true;
 
   const API_BASE = 'https://api.torn.com/v2';
-  const API_COMMENT = 'two-v0.18.4';
+  const API_COMMENT = 'two-v0.19.0';
   const PDA_API_KEY = '###PDA-APIKEY###';
 
   const KEY_STORAGE = 'two.apiKey.v1';
@@ -97,7 +97,7 @@
   const RESUME_SNAPSHOT_REUSE_MS = 3_000;
   const STRENGTH_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
   const STRENGTH_CACHE_MAX_ENTRIES = 800;
-  const STRENGTH_REQUEST_GAP_MS = 1_500;
+  const STRENGTH_REQUEST_GAP_MS = 3_000; // Two requests per member (public stats + profile) stay near 40/min.
   const OWN_PROXY_REFRESH_MS = 6 * 60 * 60_000;
   // Energy accounting for the strength estimate (see docs/RESEARCH-2026-09-13.md, section 1.4).
   const ENERGY_PER_XANAX = 250;
@@ -128,6 +128,31 @@
   const RATIO_UNCERTAINTY_WIDE = 2.5; // Exponential regime: a factor of ~6 on stats is honest for a public-stats guess.
   const CALIBRATION_MIN_PAIRS = 3;
   const CALIBRATION_SCALE_MIN = 0.2;
+  // Torn's rank name is a deterministic function of level, crimes, networth and battle-stat thresholds.
+  // Decoding it (the TornTools / Torn PDA method) yields a hard stat band with no extra requests.
+  const RANK_INDEX = Object.freeze({
+    'Absolute beginner': 1, 'Beginner': 2, 'Inexperienced': 3, 'Rookie': 4, 'Novice': 5, 'Below average': 6, 'Average': 7,
+    'Reasonable': 8, 'Above average': 9, 'Competent': 10, 'Highly competent': 11, 'Veteran': 12, 'Distinguished': 13,
+    'Highly distinguished': 14, 'Professional': 15, 'Star': 16, 'Master': 17, 'Outstanding': 18, 'Celebrity': 19,
+    'Supreme': 20, 'Idolized': 21, 'Champion': 22, 'Heroic': 23, 'Legendary': 24, 'Elite': 25, 'Invincible': 26,
+  });
+  const RANK_LEVEL_TRIGGERS = Object.freeze([2, 6, 11, 26, 31, 50, 71, 100]);
+  const RANK_CRIME_TRIGGERS = Object.freeze([100, 5000, 10000, 20000, 30000, 50000]);
+  const RANK_NETWORTH_TRIGGERS = Object.freeze([5e6, 50e6, 500e6, 5e9, 50e9]);
+  const RANK_STAT_BANDS = Object.freeze([
+    { label: 'under 2k', lo: 100, hi: 2_000 },
+    { label: '2k-25k', lo: 2_000, hi: 25_000 },
+    { label: '20k-250k', lo: 20_000, hi: 250_000 },
+    { label: '200k-2.5M', lo: 200_000, hi: 2_500_000 },
+    { label: '2M-25M', lo: 2_000_000, hi: 25_000_000 },
+    { label: '20M-250M', lo: 20_000_000, hi: 250_000_000 },
+    { label: 'over 200M', lo: 200_000_000, hi: null },
+  ]);
+  const RANK_REWORK_EPOCH = 1_451_606_400; // Accounts inactive since 2015 predate the rank rework and cannot be decoded.
+  // Win probability versus stats ratio: a logistic fitted to a Monte Carlo of the Attacking 2.0 curves, widened for
+  // the gear and build variance seen live (docs/RESEARCH-2026-09-14.md section 3).
+  const WIN_PROB_MIDPOINT_STATS_RATIO = 1.0;
+  const WIN_PROB_SCALE = 0.25;
   const CALIBRATION_SCALE_MAX = 3;
   const VERDICT_EASY_MAX_RATIO = 0.30;  // Fair Fight below ~1.8: safe but little respect.
   const VERDICT_GOOD_MAX_RATIO = 0.60;  // Fair Fight ~1.8 to ~2.6: the sweet spot.
@@ -680,7 +705,7 @@
       : null;
     return {
       script: SCRIPT,
-      version: '0.18.4',
+      version: '0.19.0',
       generatedAt: new Date().toISOString(),
       active: isActiveView(),
       factionId: Number.isFinite(Number(activeFactionId)) ? Number(activeFactionId) : null,
@@ -749,7 +774,7 @@
 
   function showDiagnosticSnapshot() {
     const payload = JSON.stringify(getDiagnosticSnapshot(), null, 2);
-    window.prompt(`${SCRIPT} v0.18.4 diagnostics - copy this text if troubleshooting is needed:`, payload);
+    window.prompt(`${SCRIPT} v0.19.0 diagnostics - copy this text if troubleshooting is needed:`, payload);
     return payload;
   }
 
@@ -1565,8 +1590,39 @@
       revives: num(stats?.hospital?.reviving?.revives),
       activitySec: num(stats?.other?.activity?.time),
       donatorDays: num(stats?.other?.donator_days),
+      crimes: num(stats?.crimes?.total),
+      networth: num(stats?.networth?.total),
     };
     return proxy.xan === null && proxy.ref === null && proxy.drink === null ? null : proxy;
+  }
+
+  // Stat band implied by Torn's public rank. Null when any input is missing or the account predates the rank rework.
+  function rankBandFromInputs(rank, level, crimes, networth, lastActionTs = null) {
+    const index = RANK_INDEX[String(rank || '').trim()];
+    if (!index) return null;
+    if (Number.isFinite(Number(lastActionTs)) && Number(lastActionTs) > 0 && Number(lastActionTs) < RANK_REWORK_EPOCH) return null;
+    if ([level, crimes, networth].some(value => value === null || value === undefined || value === '')) return null;
+    const lvl = Number(level); const crm = Number(crimes); const nw = Number(networth);
+    if (![lvl, crm, nw].every(value => Number.isFinite(value) && value >= 0)) return null;
+    const triggers = RANK_LEVEL_TRIGGERS.filter(x => x <= lvl).length
+      + RANK_CRIME_TRIGGERS.filter(x => x <= crm).length
+      + RANK_NETWORTH_TRIGGERS.filter(x => x <= nw).length;
+    const bandIndex = index - triggers - 1;
+    const band = RANK_STAT_BANDS[bandIndex];
+    return band ? { ...band, index: bandIndex } : null;
+  }
+
+  function rankBandForProxy(proxy) {
+    if (!proxy || !proxy.rank) return null;
+    return rankBandFromInputs(proxy.rank, proxy.level, proxy.crimes, proxy.networth, proxy.lastAction);
+  }
+
+  function winProbabilityFromRatio(scoreRatio) {
+    if (scoreRatio === null || scoreRatio === undefined) return null;
+    const value = Number(scoreRatio);
+    if (!Number.isFinite(value) || value < 0) return null;
+    const statsRatio = value * value;
+    return 1 / (1 + Math.exp((statsRatio - WIN_PROB_MIDPOINT_STATS_RATIO) / WIN_PROB_SCALE));
   }
 
   // Energy bought or found through items. Null when the record carries no training data at all.
@@ -1618,11 +1674,29 @@
   function estimateScoreFromProxy(proxy, ageDays) {
     const energy = gymEnergy(proxy, ageDays);
     if (!energy) return null;
-    const stats = statsFromEnergy(energy.total, proxy?.se);
+    const energyStats = statsFromEnergy(energy.total, proxy?.se);
+    if (energyStats === null) return null;
+    const linear = energy.total >= ENERGY_AT_CAP;
+    const uncertainty = linear && energy.ageKnown ? RATIO_UNCERTAINTY_NARROW : RATIO_UNCERTAINTY_WIDE;
+    // The rank band is a fact; the energy curve is a guess. Clip the guess into the band and let the band set the range.
+    const band = rankBandForProxy(proxy);
+    let stats = energyStats;
+    let statsLow = null;
+    let statsHigh = null;
+    let clippedByBand = false;
+    if (band) {
+      const hi = band.hi === null ? Number.POSITIVE_INFINITY : band.hi;
+      const clipped = Math.min(hi, Math.max(band.lo, energyStats));
+      clippedByBand = clipped !== energyStats;
+      stats = clipped;
+      statsLow = band.lo;
+      statsHigh = band.hi === null ? Math.max(stats, band.lo) * uncertainty * uncertainty : band.hi;
+    }
     const score = scoreFromStats(stats);
     if (score === null) return null;
-    const linear = energy.total >= ENERGY_AT_CAP;
-    return { score, stats, energy, linear, uncertainty: linear && energy.ageKnown ? RATIO_UNCERTAINTY_NARROW : RATIO_UNCERTAINTY_WIDE };
+    const scoreLow = statsLow !== null ? scoreFromStats(statsLow) : score / uncertainty;
+    const scoreHigh = statsHigh !== null ? scoreFromStats(statsHigh) : score * uncertainty;
+    return { score, scoreLow, scoreHigh, stats, energyStats, energy, linear, uncertainty, band, clippedByBand };
   }
 
   function getOwnProxyForTest(candidate) {
@@ -1665,6 +1739,7 @@
         if (!proxy) continue;
         const estimate = estimateScoreFromProxy(proxy, getAgeDaysForUser(Number(userId)));
         if (!estimate || !(estimate.score > 0)) continue;
+        if (estimate.clippedByBand) continue; // A clipped value measures the band edge, not the energy model.
         logs.push(Math.log(observed / estimate.score));
       }
     }
@@ -1688,6 +1763,7 @@
     const entry = strengthCache[String(userId)];
     if (!entry || !Number.isFinite(Number(entry.savedAt))) return null;
     if (Date.now() - Number(entry.savedAt) > STRENGTH_CACHE_MAX_AGE_MS) return null;
+    if (!('rank' in entry)) return null; // Pre-v0.19 record without the rank band inputs.
     return entry;
   }
 
@@ -1709,18 +1785,25 @@
       ownUncertainty = own.uncertainty;
     }
     const scale = calibration?.applied ? calibration.scale : 1;
-    const ratio = (theirs.score * scale) / ownScore;
-    const spread = theirs.uncertainty * ownUncertainty;
+    // The rank band is a hard fact: calibration moves the point within it but never the band edges.
+    const scaledScore = theirs.band ? Math.min(theirs.scoreHigh, Math.max(theirs.scoreLow, theirs.score * scale)) : theirs.score * scale;
+    const edgeScale = theirs.band ? 1 : scale;
+    const ratio = scaledScore / ownScore;
+    const ratioLow = (theirs.scoreLow * edgeScale) / (ownScore * ownUncertainty);
+    const ratioHigh = (theirs.scoreHigh * edgeScale) / (ownScore / ownUncertainty);
     const eloTheirs = Number(theirProxy?.elo);
     const eloOwn = Number(ownProxy?.elo);
     const eloGap = Number.isFinite(eloTheirs) && Number.isFinite(eloOwn) && eloTheirs > 0 && eloOwn > 0 ? eloTheirs - eloOwn : null;
     return {
       ratio,
-      ratioLow: ratio / spread,
-      ratioHigh: ratio * spread,
+      ratioLow: Math.min(ratio, ratioLow),
+      ratioHigh: Math.max(ratio, ratioHigh),
       ff: fairFightFromScores(ratio, 1),
       capped: ratio >= 0.75,
       statsTheirs: theirs.stats,
+      energyStatsTheirs: theirs.energyStats,
+      band: theirs.band,
+      clippedByBand: theirs.clippedByBand,
       energyTheirs: theirs.energy,
       linearTheirs: theirs.linear,
       ageKnown: theirs.energy.ageKnown,
@@ -1792,6 +1875,9 @@
           const signedUp = Number(profile?.profile?.signed_up);
           if (Number.isFinite(age) && age > 0) ageDays = age;
           else if (Number.isFinite(signedUp) && signedUp > 0) ageDays = Math.max(1, (serverNowSec() - signedUp) / 86400);
+          proxy.rank = typeof profile?.profile?.rank === 'string' ? profile.profile.rank : null;
+          proxy.level = Number.isFinite(Number(profile?.profile?.level)) ? Number(profile.profile.level) : null;
+          proxy.lastAction = Number.isFinite(Number(profile?.profile?.last_action?.timestamp)) ? Number(profile.profile.last_action.timestamp) : null;
         } catch (err) {
           if (err?.message !== 'API backoff active.') console.warn(`[${SCRIPT}] Could not read own profile age; the strength model uses activity time instead.`, err);
         }
@@ -1856,7 +1942,7 @@
     strengthQueuedIds.clear();
   }
 
-  const EMPTY_STRENGTH_PROXY = Object.freeze({ xan: null, ref: null, drink: null, boost: null, se: null, elo: null, won: null, lost: null, draw: null, revives: null, activitySec: null, donatorDays: null });
+  const EMPTY_STRENGTH_PROXY = Object.freeze({ xan: null, ref: null, drink: null, boost: null, se: null, elo: null, won: null, lost: null, draw: null, revives: null, activitySec: null, donatorDays: null, crimes: null, networth: null, rank: null, level: null, lastAction: null });
 
   function storeStrengthProxy(userId, proxy) {
     strengthCache[String(userId)] = { ...EMPTY_STRENGTH_PROXY, ...(proxy || {}), savedAt: Date.now() };
@@ -1864,10 +1950,48 @@
     invalidateCalibration();
   }
 
+  // Profile facts the rank band needs, remembered for the strength cache lifetime so the age worker's fetch is reused.
+  const recentProfileByUser = new Map(); // userId -> { rank, level, lastAction, at }
+
+  function rememberProfileFacts(userId, profile) {
+    if (!profile) return;
+    recentProfileByUser.set(userId, {
+      rank: typeof profile.rank === 'string' ? profile.rank : null,
+      level: Number.isFinite(Number(profile.level)) ? Number(profile.level) : null,
+      lastAction: Number.isFinite(Number(profile.last_action?.timestamp)) ? Number(profile.last_action.timestamp) : null,
+      at: Date.now(),
+    });
+  }
+
   async function fetchStrength(userId) {
     incStat('strengthFetches');
     const data = await apiGet(`/user/${userId}/personalstats`, { query: { cat: 'popular' } });
-    storeStrengthProxy(userId, proxyFromPopularStats(data?.personalstats));
+    const proxy = proxyFromPopularStats(data?.personalstats) || {};
+    // The profile supplies rank, level and last action for the rank band, and the exact signup for the age term.
+    try {
+      const remembered = recentProfileByUser.get(userId);
+      let facts = remembered && Date.now() - remembered.at <= STRENGTH_CACHE_MAX_AGE_MS ? remembered : null;
+      if (!facts) {
+        const profileData = await apiGet(`/user/${userId}/profile`);
+        const profile = profileData?.profile;
+        if (profile) {
+          rememberProfileFacts(userId, profile);
+          facts = recentProfileByUser.get(userId);
+          const signedUp = Number(profile.signed_up);
+          if (Number.isFinite(signedUp) && signedUp > 0) setSignedUp(userId, signedUp);
+        }
+      }
+      if (facts) {
+        proxy.rank = facts.rank;
+        proxy.level = facts.level;
+        proxy.lastAction = facts.lastAction;
+      }
+    } catch (err) {
+      // A transient failure is retried by the worker (one repeated personalstats call); only a permanent one is stored.
+      if (err?.retryable || err?.message === 'API backoff active.') throw err;
+      console.warn(`[${SCRIPT}] Could not fetch profile for rank band of ${userId}`, err);
+    }
+    storeStrengthProxy(userId, proxy);
   }
 
   async function runStrengthWorker() {
@@ -2076,8 +2200,14 @@
     }
 
     // Smoothed personal win probability. The prior leans on Fair Fight: a capped FF means the opponent is at least 75% of our score.
-    let priorMean = ff === null ? 0.6 : ffCapped ? 0.45 : ff >= 2.5 ? 0.7 : 0.88;
-    if (ffSource === 'proxy') priorMean = 0.6 + (priorMean - 0.6) * 0.6; // An estimate deserves less conviction than a fight.
+    // Prior win probability from the strength ratio (logistic fitted to simulated fights). An observed capped Fair Fight
+    // only says "at least 75% of your score", so it is treated as roughly 85%; a public-stats estimate is shrunk toward even.
+    let priorMean = 0.6;
+    if (ratio !== null) {
+      const effectiveRatio = ffCapped && ratioSource !== 'proxy' ? Math.max(ratio, 0.85) : ratio;
+      priorMean = winProbabilityFromRatio(effectiveRatio) ?? 0.6;
+    }
+    if (ffSource === 'proxy') priorMean = 0.6 + (priorMean - 0.6) * 0.6;
     const priorWeight = 2;
     const winProb = (wins + priorWeight * priorMean) / (decisive.length + priorWeight);
 
@@ -2268,6 +2398,9 @@
     for (const reason of intel.verdictReasons) parts.push(reason.charAt(0).toUpperCase() + reason.slice(1));
     if (intel.verdictEstimated && intel.theirProxy && intel.ownProxy && intel.proxy) {
       const energy = intel.proxy.energyTheirs;
+      if (intel.proxy.band) {
+        parts.push(`Torn rank "${intel.theirProxy.rank}" places them in the ${intel.proxy.band.label} stat band${intel.proxy.clippedByBand ? ` (energy-based guess of ${formatStats(intel.proxy.energyStatsTheirs)} was clipped into it)` : ''}`);
+      }
       parts.push(`Estimated total stats about ${formatStats(intel.proxy.statsTheirs)} from roughly ${formatCount(Math.round(energy.total))} gym energy (${formatCount(intel.theirProxy.xan)} xanax, ${formatCount(intel.theirProxy.ref)} refills, ${formatCount(intel.theirProxy.drink)} drinks, ${formatCount(Math.round(energy.natural))} natural over ~${Math.round(energy.activeDays)} active days, minus ${formatCount(Math.round(energy.spent))} spent attacking)`);
       parts.push(intel.proxy.ownExact ? 'Compared against your real battle stats' : `Compared against your own public stats (${formatCount(intel.ownProxy.xan)} xanax, ${formatCount(intel.ownProxy.ref)} refills)`);
       if (intel.theirProxy.elo !== null && intel.ownProxy.elo !== null) parts.push(`Attack Elo ${formatCount(intel.theirProxy.elo)} vs your ${formatCount(intel.ownProxy.elo)}`);
@@ -2454,16 +2587,6 @@
       setAttackApiKey();
     });
 
-    const warChip = document.createElement('span');
-    warChip.className = 'two-context-chip two-war-chip';
-    warChip.hidden = true;
-    warChip.title = 'Ranked war score';
-
-    const chainChip = document.createElement('span');
-    chainChip.className = 'two-context-chip two-chain-chip';
-    chainChip.hidden = true;
-    chainChip.title = 'Your faction chain';
-
     const sync = document.createElement('span');
     sync.className = 'two-sync-indicator two-syncing';
     sync.textContent = 'SYNC';
@@ -2495,7 +2618,7 @@
 
     const right = document.createElement('div');
     right.className = 'two-toolbar-right';
-    right.append(historyKeyButton, warChip, chainChip, sync, counter);
+    right.append(historyKeyButton, sync, counter);
     // The main row stays a single non-wrapping line; the filter bar is a separate full-width row underneath.
     const mainRow = document.createElement('div');
     mainRow.className = 'two-toolbar-row';
@@ -2506,8 +2629,6 @@
     toolbar.__twoFilterBar = filterBar;
     toolbar.__twoFilterChips = chips;
     toolbar.__twoEvChips = evChips;
-    toolbar.__twoWarChip = warChip;
-    toolbar.__twoChainChip = chainChip;
     toolbar.__twoAllButton = allButton;
     toolbar.__twoTargetButton = targetButton;
     toolbar.__twoSettingsButton = settingsButton;
@@ -2715,9 +2836,6 @@
       const historyKeyButton = toolbar.__twoHistoryKeyButton;
       if (historyKeyButton) historyKeyButton.hidden = attackHistoryFeatureState !== 'unsupported';
 
-      renderWarChip(toolbar.__twoWarChip);
-      renderChainChip(toolbar.__twoChainChip);
-
       const sync = toolbar.__twoSync;
       sync.textContent = indicator.text;
       sync.className = `two-sync-indicator ${indicator.className}`;
@@ -2742,40 +2860,6 @@
     const hoursElapsed = Math.floor((now - decayStartsAt) / 3600);
     const nextAt = decayStartsAt + (hoursElapsed + 1) * 3600;
     return { started: true, nextAt, secondsToNext: nextAt - now };
-  }
-
-  function renderWarChip(chip) {
-    if (!chip) return;
-    const war = currentWar;
-    if (!intelEnabled() || !war || !Number.isFinite(Number(war.target)) || !Number.isFinite(Number(war.ownScore)) || !Number.isFinite(Number(war.enemyScore))) {
-      if (!chip.hidden) chip.hidden = true;
-      return;
-    }
-    const lead = Number(war.ownScore) - Number(war.enemyScore);
-    const target = Number(war.target);
-    const text = `WAR ${lead >= 0 ? '+' : ''}${lead} / ${target}`;
-    const decay = getWarDecayInfo(war);
-    const ageSec = Number.isFinite(Number(war.fetchedAtPerf)) ? Math.max(0, Math.floor((monotonicNowMs() - Number(war.fetchedAtPerf)) / 1000)) : null;
-    const remaining = Math.max(0, target - lead);
-    const signature = `${text}|${decay?.started ? 1 : 0}|${Math.floor((decay?.secondsToNext || 0) / 60)}|${ageSec === null ? '' : Math.floor(ageSec / 30)}`;
-    if (chip.dataset.twoSignature !== signature) {
-      chip.dataset.twoSignature = signature;
-      chip.hidden = false;
-      chip.textContent = text;
-      chip.classList.toggle('two-chip-positive', lead > 0);
-      chip.classList.toggle('two-chip-negative', lead < 0);
-      const lines = [
-        `Ranked war: ${war.ownName || 'us'} ${war.ownScore} vs ${war.enemyName || 'them'} ${war.enemyScore}`,
-        `Lead ${lead >= 0 ? '+' : ''}${lead}; target ${target}; ${lead >= target ? 'target reached' : `${remaining} more needed`}`,
-      ];
-      if (decay) {
-        lines.push(decay.started
-          ? `Target decays 1% of the original per hour; next reduction in ${formatClock(decay.secondsToNext)}`
-          : `Target decay starts 24h after war start (in ${formatDurationCompact(decay.secondsToNext)})`);
-      }
-      if (ageSec !== null) lines.push(`Score refreshed ${ageSec}s ago`);
-      chip.title = lines.join(' | ');
-    }
   }
 
   function renderChainChip(chip) {
@@ -3411,8 +3495,8 @@
   }
 
   function queueOldProfilesSlowly() {
-    // Exact age of every member feeds the natural-energy term of the strength model; one request per member, once ever.
-    if (!LOAD_OLD_EXACT_AGES_SLOWLY && !intelEnabled()) return;
+    // The strength worker fetches each member's profile (rank band + exact age) itself; the cold queue only runs when it cannot.
+    if (!LOAD_OLD_EXACT_AGES_SLOWLY && (!intelEnabled() || !strengthUnsupported)) return;
     const ids = Array.from(rowsByUser.keys())
       .filter(id => ['old', 'level-excluded'].includes(ageHintByUser.get(id)) && !getSignedUp(id))
       .sort((a, b) => {
@@ -3460,6 +3544,7 @@
       throw new ApiError(`Profile ${userId} did not provide a valid signup timestamp.`);
     }
     setSignedUp(userId, signedUp);
+    rememberProfileFacts(userId, profile);
 
     // Live status remains faction-only. Profile contributes permanent account-age data only.
     renderUser(userId);
@@ -4359,7 +4444,7 @@
         border-bottom:1px solid rgba(0,0,0,.55); background:linear-gradient(to bottom,rgba(57,57,57,.98),rgba(38,38,38,.98));
         color:#d8d8d8; font-family:Arial,sans-serif; position:relative; z-index:25;
       }
-      .two-mode-group { display:flex; flex-wrap:wrap; align-items:center; border:1px solid rgba(255,255,255,.15); border-radius:4px; overflow:hidden; background:rgba(0,0,0,.18); max-width:100%; }
+      .two-mode-group { display:flex; flex-wrap:nowrap; align-items:center; flex-shrink:0; border:1px solid rgba(255,255,255,.15); border-radius:4px; overflow:hidden; background:rgba(0,0,0,.18); max-width:100%; }
       .two-mode-btn { appearance:none; -webkit-appearance:none; min-height:22px; margin:0; padding:2px 8px; border:0; border-right:1px solid rgba(255,255,255,.12); border-radius:0; background:transparent; color:#aaa; font:800 9px/1 Arial,sans-serif; letter-spacing:.25px; cursor:pointer; touch-action:manipulation; }
       .two-mode-btn:last-child { border-right:0; }
       .two-mode-btn.two-active { background:rgba(255,255,255,.13); color:#fff; box-shadow:inset 0 -2px 0 rgba(220,220,220,.65); }
@@ -4727,7 +4812,7 @@
       const proven = deriveOpponentIntel({ w: 3, l: 0, n: 0, r: [sample(10, 'win'), sample(20, 'win'), sample(30, 'win')], ff: 2.71, ffAt: nowSec - 10 }, { level: 60, chainSnapshot: { nextHit: 1 } });
       if (proven.label !== 'PROVEN' || proven.ff !== 2.71 || proven.scoreSource !== 'model') faults.push('intel proven state');
       if (Math.abs(proven.expectedScore - 1.3 * 2 * 2.71) > 1e-9) faults.push('intel expected score');
-      if (Math.abs(proven.winProb - (3 + 2 * 0.7) / 5) > 1e-9 || Math.abs(proven.ev - proven.winProb * proven.expectedScore) > 1e-9) faults.push('intel win probability');
+      if (Math.abs(proven.winProb - (3 + 2 * winProbabilityFromRatio(defenderScoreFromFairFight(2.71, 1))) / 5) > 1e-9 || Math.abs(proven.ev - proven.winProb * proven.expectedScore) > 1e-9) faults.push('intel win probability');
       const risk = deriveOpponentIntel({ w: 1, l: 1, n: 0, r: [sample(10, 'loss'), sample(20, 'win')] }, { level: 60 });
       if (risk.label !== 'RISK') faults.push('intel risk state');
       const changed = deriveOpponentIntel({ w: 5, l: 2, n: 0, r: [sample(10, 'loss'), sample(20, 'loss'), sample(30, 'win'), sample(40, 'win'), sample(50, 'win'), sample(60, 'win'), sample(70, 'win')] }, { level: 60 });
@@ -4772,6 +4857,20 @@
       const calibrated = estimateMatchFromProxy({ ...ownProxy }, ownProxy, { theirAgeDays: 1500, ownAgeDays: 1500, calibration: { applied: true, scale: 0.5, pairs: 5 } });
       if (!calibrated || Math.abs(calibrated.ratio - 0.5) > 1e-9 || !calibrated.calibrated) faults.push('proxy calibration scale');
       if (estimateMatchFromProxy(null, ownProxy) !== null || estimateMatchFromProxy(ownProxy, null) !== null) faults.push('proxy missing side');
+      // Rank band decode: Competent (10), level 39 (5 triggers), 3,000 crimes (1), 1M networth (0) -> index 3 -> 200k-2.5M.
+      const band = rankBandFromInputs('Competent', 39, 3000, 1_000_000);
+      if (!band || band.label !== '200k-2.5M') faults.push('rank band decode');
+      if (rankBandFromInputs('Bogus', 39, 3000, 0) !== null || rankBandFromInputs('Competent', 39, 3000, 0, 1_400_000_000) !== null) faults.push('rank band rejects');
+      if (rankBandFromInputs('Competent', 39, null, 0) !== null || rankBandFromInputs('Competent', null, 3000, 0) !== null) faults.push('rank band missing inputs');
+      const cappedModel = deriveOpponentIntel({ w: 0, l: 0, n: 0, r: [], ff: 3, ffAt: nowSec - 10, bss: 30, bssAt: nowSec - 10, bssCap: true }, { level: 60, ownBss: 40 });
+      if (Math.abs(cappedModel.winProb - winProbabilityFromRatio(0.85)) > 1e-9) faults.push('capped model win prior');
+      const bandedScaled = estimateMatchFromProxy({ xan: 3000, ref: 124, drink: 4, boost: 0, se: 0, won: 2052, lost: 253, draw: 0, revives: 0, activitySec: 262 * 7200, donatorDays: 0, rank: 'Competent', level: 39, crimes: 3000, networth: 1_000_000, lastAction: 1_750_000_000 }, null, { theirAgeDays: 400, ownBss: 1000, calibration: { applied: true, scale: 0.2, pairs: 5 } });
+      if (!bandedScaled || bandedScaled.ratioLow * 1000 < scoreFromStats(200_000) - 1e-6 || bandedScaled.ratio * 1000 < scoreFromStats(200_000) - 1e-6) faults.push('calibration stays inside band');
+      const banded = estimateScoreFromProxy({ xan: 3000, ref: 124, drink: 4, boost: 0, se: 0, won: 2052, lost: 253, draw: 0, revives: 0, activitySec: 262 * 7200, donatorDays: 0, rank: 'Competent', level: 39, crimes: 3000, networth: 1_000_000, lastAction: 1_750_000_000 }, 400);
+      if (!banded || !banded.band || !banded.clippedByBand || banded.stats !== 2_500_000 || banded.scoreLow >= banded.score || banded.scoreHigh < banded.score) faults.push('rank band clips estimate');
+      const unbanded = estimateScoreFromProxy({ xan: 662, ref: 124, drink: 4, boost: 0, se: 0, won: 2052, lost: 253, draw: 0, revives: 0, activitySec: 262 * 7200, donatorDays: 0 }, 400);
+      if (!unbanded || unbanded.band || unbanded.clippedByBand || Math.abs(unbanded.stats - unbanded.energyStats) > 1e-6) faults.push('estimate without rank');
+      if (Math.abs(winProbabilityFromRatio(1) - 0.5) > 1e-9 || !(winProbabilityFromRatio(0.7) > 0.85) || !(winProbabilityFromRatio(1.2) < 0.25) || winProbabilityFromRatio(null) !== null) faults.push('win probability curve');
       const uncertain = deriveOpponentIntel(null, { level: 40, proxy: { ratio: 0.5, ratioLow: 0.16, ratioHigh: 1.5, ff: 2.33, capped: false, ageKnown: false, eloGap: 0, eloDisagrees: false } });
       if (uncertain.verdict !== null || !uncertain.verdictReasons.some(reason => reason.includes('too uncertain'))) faults.push('verdict uncertainty gate');
       if (verdictFromRatio(0.2) !== 'EASY' || verdictFromRatio(0.45) !== 'GOOD' || verdictFromRatio(0.7) !== 'RISKY' || verdictFromRatio(0.9) !== 'AVOID' || verdictFromRatio(null) !== null) faults.push('verdict tiers');

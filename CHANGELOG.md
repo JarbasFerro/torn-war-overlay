@@ -4,6 +4,13 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.19.0 - Rank-band estimates and modelled win probability
+
+- The strength estimate is now bounded by Torn's own rank: the public rank name is a deterministic function of level, crimes, networth and battle-stat thresholds (the same decode Torn PDA and TornTools use), so every member gets a hard stat band such as `2M-25M`. The energy-based guess is clipped into that band and the plausible range is the band itself. The tooltip shows the band and says when the guess was clipped.
+- The profile lookup that supplies rank also supplies exact age, so the separate cold age queue no longer runs; each member costs two public requests per week, paced at one pair every three seconds.
+- Win probability now comes from a logistic curve fitted to simulated fights on Torn's combat formulas and widened for gear variance, instead of three fixed steps. An observed capped Fair Fight counts as roughly 85% of your strength.
+- Removed the `WAR` and `CHAIN` chips from the faction toolbar; Torn shows both directly above the list, and the chips pushed the mode buttons onto a second line on phones. The attack-page panel keeps its chain chip, and BEST still switches to the safest target before a bonus hit.
+
 ## 0.18.4 - Attack page learns from your last fights
 
 - The attack page now reads your outgoing attacks from the last six hours once on load, so a fight you finished a minute ago already shows as an observed verdict instead of the estimate. One Limited-key request.
