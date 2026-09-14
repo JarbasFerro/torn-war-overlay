@@ -18,7 +18,8 @@ The script is designed primarily for **Torn PDA** and also supports standard use
 - A plain-language match verdict on every row, `EASY | GOOD | RISKY | AVOID`, estimated from public stats before you have fought someone and replaced by real evidence after.
 - Personal intel per opponent: observed Fair Fight, expected score per hit, expected value per 25 energy (`EV`) and a `PROVEN | LIKELY | UNKNOWN | RISK | CHANGED` confidence label.
 - A single `★ BEST` recommendation among current green targets, with a tap/hover explanation.
-- The same verdict, `EV`, hospital countdown and chain state (with a `BONUS #n` warning) on the attack page itself, in a small floating panel with a tap-to-expand explanation.
+- The same verdict, `EV`, hospital countdown, chain state (with a `BONUS #n` warning) and your energy on the attack page itself, in a small floating panel with a tap-to-expand explanation.
+- After each fight the panel shows the result and a `NEXT` link to the best green target on the roster right now.
 - Adaptive API polling, caching, incremental attack-history updates and foreground-only live processing.
 
 ## Default target rules
@@ -101,7 +102,7 @@ Torn API ToS disclosure:
 |---|---|
 | Data storage | Faction statuses, account ages, public training stats, your own attack results and derived opponent intel are stored locally on the device/browser only. |
 | Data sharing | None. No backend, no analytics, no third-party service. |
-| Purpose of use | Ranked-war target overlay on the faction page. |
+| Purpose of use | Ranked-war target overlay on the faction page and attack page. |
 | Key storage and sharing | Manual keys are stored in local browser storage and sent only to `api.torn.com`. Torn PDA supplies its own key. Keys are never shared. |
 | Key access level | Public for the core overlay. Limited (or Custom with `user -> attacks` and `user -> battlestats`) for personal intel. |
 
@@ -156,9 +157,9 @@ Do **not** post API keys in an issue.
 
 ## Development status
 
-Current release candidate: **v0.19.0**.
+Current release candidate: **v0.20.0**.
 
-v0.19.0 bounds every estimate by Torn's rank band and models win probability from the combat formulas. v0.18 added list filters, `OUT EARLY` labels and several live-war fixes. v0.17.0 carries the verdict, expected value, hospital countdown and chain state onto the attack page. v0.16.0 replaced the v0.15 strength estimate with a model built on Torn's gym formula, natural energy and self-calibration from real fights. The green/yellow targeting path is unchanged since v0.13.1 apart from the null-timer fix and API-sourced levels; old members now show their exact age instead of `>=1.5y`.
+v0.20.0 captures each fight's result on the attack page and offers the next best target. v0.19.0 bounds every estimate by Torn's rank band and models win probability from the combat formulas. v0.18 added list filters, `OUT EARLY` labels and several live-war fixes. v0.17.0 carries the verdict, expected value, hospital countdown and chain state onto the attack page. v0.16.0 replaced the v0.15 strength estimate with a model built on Torn's gym formula, natural energy and self-calibration from real fights. The green/yellow targeting path is unchanged since v0.13.1 apart from the null-timer fix and API-sourced levels; old members now show their exact age instead of `>=1.5y`.
 
 The v0.13 line was validated in real ranked-war use. v0.14 to v0.16 need the same real-war validation before promotion; `docs/RESEARCH-2026-09-13.md` explains the model and lists what to check.
 

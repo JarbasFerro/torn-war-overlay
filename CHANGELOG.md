@@ -4,6 +4,12 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.20.0 - Fight result capture and next target
+
+- On the attack page the script now reads the fight's finishing line from the log you are looking at (for example "left X on the street (+3.18)") and shows the result immediately as `WIN +3.18`, `LOSS` or `NO RESULT`. The API record is ingested a few seconds later so the opponent's verdict updates before your next fight. Only the page currently being viewed is read; nothing is automated.
+- After a fight the panel offers `NEXT`: the best green target on the enemy roster right now, chosen by the same rule as `★ BEST` (highest expected value among safe verdicts, or the safest proven target before a bonus hit), as a plain link with its verdict badge. One roster request per fight.
+- An energy readout on the attack panel, `E 85 · 3 hits`, from your own bars with a Minimal key, refreshed every minute; hidden when the key cannot read it.
+
 ## 0.19.0 - Rank-band estimates and modelled win probability
 
 - The strength estimate is now bounded by Torn's own rank: the public rank name is a deterministic function of level, crimes, networth and battle-stat thresholds (the same decode Torn PDA and TornTools use), so every member gets a hard stat band such as `2M-25M`. The energy-based guess is clipped into that band and the plausible range is the band itself. The tooltip shows the band and says when the guess was clipped.

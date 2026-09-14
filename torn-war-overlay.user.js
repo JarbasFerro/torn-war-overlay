@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.19.0
+// @version      0.20.0
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -34,15 +34,15 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0190__';
+  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0200__';
   if (window[INSTANCE_KEY]) {
-    console.warn(`[${SCRIPT}] v0.19.0 is already running; duplicate injection ignored.`);
+    console.warn(`[${SCRIPT}] v0.20.0 is already running; duplicate injection ignored.`);
     return;
   }
   window[INSTANCE_KEY] = true;
 
   const API_BASE = 'https://api.torn.com/v2';
-  const API_COMMENT = 'two-v0.19.0';
+  const API_COMMENT = 'two-v0.20.0';
   const PDA_API_KEY = '###PDA-APIKEY###';
 
   const KEY_STORAGE = 'two.apiKey.v1';
@@ -267,6 +267,7 @@
     resumeCount: 0,
     watchdogRecoveries: 0,
     transportTimeouts: 0,
+    fightResultsCaptured: 0,
     intelAttacksProcessed: 0,
     intelAttacksSkipped: 0,
     chainRefreshes: 0,
@@ -705,7 +706,7 @@
       : null;
     return {
       script: SCRIPT,
-      version: '0.19.0',
+      version: '0.20.0',
       generatedAt: new Date().toISOString(),
       active: isActiveView(),
       factionId: Number.isFinite(Number(activeFactionId)) ? Number(activeFactionId) : null,
@@ -774,7 +775,7 @@
 
   function showDiagnosticSnapshot() {
     const payload = JSON.stringify(getDiagnosticSnapshot(), null, 2);
-    window.prompt(`${SCRIPT} v0.19.0 diagnostics - copy this text if troubleshooting is needed:`, payload);
+    window.prompt(`${SCRIPT} v0.20.0 diagnostics - copy this text if troubleshooting is needed:`, payload);
     return payload;
   }
 
@@ -1956,6 +1957,7 @@
   function rememberProfileFacts(userId, profile) {
     if (!profile) return;
     recentProfileByUser.set(userId, {
+      factionId: Number.isFinite(Number(profile.faction_id)) && Number(profile.faction_id) > 0 ? Number(profile.faction_id) : null,
       rank: typeof profile.rank === 'string' ? profile.rank : null,
       level: Number.isFinite(Number(profile.level)) ? Number(profile.level) : null,
       lastAction: Number.isFinite(Number(profile.last_action?.timestamp)) ? Number(profile.last_action.timestamp) : null,
@@ -2316,6 +2318,34 @@
     };
   }
 
+  // Rank of one member as a recommendation, or null when it must not be recommended. Shared by BEST and NEXT.
+  function bestCandidateRank(userId, bonusNext, { applyFilters = true } = {}) {
+    const target = getTargetState(userId);
+    if (!target.ideal) return null;
+    const intel = getOpponentIntel(userId);
+    if (intel.ev === null || !(intel.label === 'PROVEN' || intel.label === 'LIKELY')) return null;
+    // Never recommend a fight the verdict itself calls risky, whatever the win record says,
+    // nor one whose estimate was withheld as too uncertain, nor a row the user has filtered out of view.
+    if (intel.verdict !== null && intel.verdict !== 'EASY' && intel.verdict !== 'GOOD') return null;
+    if (intel.verdict === null && intel.ratioSource === 'proxy') return null;
+    if (applyFilters && !rowPassesFilters(userId, target, intel)) return null;
+    // During a bonus hit the priority is securing it, so rank by win confidence first.
+    return { userId, rank: bonusNext ? [intel.winProb, intel.ev] : [intel.ev, intel.winProb], intel, target };
+  }
+
+  function pickBestCandidate(userIds, bonusNext, options = {}) {
+    let best = null;
+    for (const userId of userIds) {
+      const candidate = bestCandidateRank(userId, bonusNext, options);
+      if (!candidate) continue;
+      const better = !best
+        || candidate.rank[0] > best.rank[0] + 1e-9
+        || (Math.abs(candidate.rank[0] - best.rank[0]) <= 1e-9 && candidate.rank[1] > best.rank[1]);
+      if (better) best = candidate;
+    }
+    return best;
+  }
+
   function computeBestTarget() {
     const previous = bestTargetUserId;
     bestTargetUserId = null;
@@ -2325,24 +2355,7 @@
     }
     const chainSnapshot = getChainSnapshot();
     const bonusNext = Boolean(chainSnapshot?.bonusNext);
-    let best = null;
-    for (const userId of rowsByUser.keys()) {
-      const target = getTargetState(userId);
-      if (!target.ideal) continue;
-      const intel = getOpponentIntel(userId);
-      if (intel.ev === null || !(intel.label === 'PROVEN' || intel.label === 'LIKELY')) continue;
-      // Never recommend a fight the verdict itself calls risky, whatever the win record says,
-      // nor one whose estimate was withheld as too uncertain, nor a row the user has filtered out of view.
-      if (intel.verdict !== null && intel.verdict !== 'EASY' && intel.verdict !== 'GOOD') continue;
-      if (intel.verdict === null && intel.ratioSource === 'proxy') continue;
-      if (!rowPassesFilters(userId, target, intel)) continue;
-      // During a bonus hit the priority is securing it, so rank by win confidence first.
-      const rank = bonusNext ? [intel.winProb, intel.ev] : [intel.ev, intel.winProb];
-      const better = !best
-        || rank[0] > best.rank[0] + 1e-9
-        || (Math.abs(rank[0] - best.rank[0]) <= 1e-9 && rank[1] > best.rank[1]);
-      if (better) best = { userId, rank, intel };
-    }
+    const best = pickBestCandidate(rowsByUser.keys(), bonusNext, { applyFilters: true });
     if (best) {
       bestTargetUserId = best.userId;
       bestTargetReason = bonusNext
@@ -4517,6 +4530,16 @@
       .two-attack-status-due { color:#c6ff84; border-color:rgba(123,255,74,.95); background:rgba(36,72,10,.9); }
       .two-attack-status-away { color:#bfc8d0; }
       .two-attack-toggle { appearance:none; -webkit-appearance:none; width:20px; height:20px; margin:0; padding:0; border-radius:50%; border:1px solid rgba(255,255,255,.25); background:rgba(255,255,255,.08); color:#ddd; font:800 11px/1 Arial,sans-serif; cursor:pointer; touch-action:manipulation; }
+      .two-attack-next { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:4px; padding-top:4px; border-top:1px solid rgba(255,255,255,.12); }
+      .two-attack-next[hidden] { display:none !important; }
+      .two-attack-result { padding:2px 5px; border-radius:3px; border:1px solid rgba(255,255,255,.2); font:800 9px/1 Arial,sans-serif; }
+      .two-attack-result-win { color:#c9ffa0; border-color:rgba(137,255,67,.5); background:rgba(37,70,17,.5); }
+      .two-attack-result-loss { color:#ffb1a6; border-color:rgba(255,95,78,.6); background:rgba(75,24,18,.6); }
+      .two-attack-result-stalemate { color:#ddd; }
+      .two-attack-next-label { color:#999; font:800 8px/1 Arial,sans-serif; letter-spacing:.3px; }
+      .two-attack-next-link { color:#fff7d1; font:800 11px/1.2 Arial,sans-serif; text-decoration:none; padding:3px 8px; border-radius:4px; border:1px solid rgba(255,224,102,.9); background:rgba(92,70,8,.9); touch-action:manipulation; }
+      .two-attack-next-none { color:#bbb; font-weight:400; }
+      .two-attack-panel .two-attack-next .two-intel-badge { pointer-events:none; }
       .two-attack-detail { margin-top:4px; padding-top:4px; border-top:1px solid rgba(255,255,255,.12); font-weight:400; font-size:10px; color:#ccc; max-height:40vh; overflow:auto; }
       .two-attack-detail div { padding:1px 0; }
       .two-attack-detail div:first-child { color:#fff; font-weight:700; }
@@ -4871,6 +4894,18 @@
       const unbanded = estimateScoreFromProxy({ xan: 662, ref: 124, drink: 4, boost: 0, se: 0, won: 2052, lost: 253, draw: 0, revives: 0, activitySec: 262 * 7200, donatorDays: 0 }, 400);
       if (!unbanded || unbanded.band || unbanded.clippedByBand || Math.abs(unbanded.stats - unbanded.energyStats) > 1e-6) faults.push('estimate without rank');
       if (Math.abs(winProbabilityFromRatio(1) - 0.5) > 1e-9 || !(winProbabilityFromRatio(0.7) > 0.85) || !(winProbabilityFromRatio(1.2) < 0.25) || winProbabilityFromRatio(null) !== null) faults.push('win probability curve');
+      const win = classifyFightLine('Jarbas left RadiantRedneck on the street (+3.18)', 'RadiantRedneck');
+      if (!win || win.kind !== 'win' || win.method !== 'leave' || Math.abs(win.respect - 3.18) > 1e-9) faults.push('fight line win');
+      const hospLoss = classifyFightLine('GatecrashR hospitalized Jarbas', 'GatecrashR');
+      if (!hospLoss || hospLoss.kind !== 'loss' || hospLoss.method !== 'hospitalize' || hospLoss.respect !== null) faults.push('fight line loss');
+      const mug = classifyFightLine('Jarbas mugged Someone and stole $12,345 (+2.10)', 'Someone');
+      if (!mug || mug.kind !== 'win' || mug.method !== 'mug' || Math.abs(mug.respect - 2.1) > 1e-9) faults.push('fight line mug');
+      if (classifyFightLine('Jarbas hit RadiantRedneck with his Kodachi in the Stomach for 922', 'RadiantRedneck') !== null) faults.push('fight line non-terminal');
+      if (classifyFightLine('GatecrashR hospitalized Jarbas', '')?.kind !== 'unknown') faults.push('fight line unknown target');
+      if (classifyFightLine('You left GatecrashR on the street (+4.10)', '')?.kind !== 'win' || classifyFightLine('GatecrashR hospitalized you', '')?.kind !== 'loss') faults.push('fight line you forms');
+      if (classifyFightLine('You were hospitalized by GatecrashR', 'GatecrashR')?.kind !== 'loss') faults.push('fight line passive loss');
+      const staleLine = classifyFightLine('The fight ended in a stalemate', 'X');
+      if (!staleLine || staleLine.kind !== 'stalemate') faults.push('fight line stalemate');
       const uncertain = deriveOpponentIntel(null, { level: 40, proxy: { ratio: 0.5, ratioLow: 0.16, ratioHigh: 1.5, ff: 2.33, capped: false, ageKnown: false, eloGap: 0, eloDisagrees: false } });
       if (uncertain.verdict !== null || !uncertain.verdictReasons.some(reason => reason.includes('too uncertain'))) faults.push('verdict uncertainty gate');
       if (verdictFromRatio(0.2) !== 'EASY' || verdictFromRatio(0.45) !== 'GOOD' || verdictFromRatio(0.7) !== 'RISKY' || verdictFromRatio(0.9) !== 'AVOID' || verdictFromRatio(null) !== null) faults.push('verdict tiers');
@@ -4952,6 +4987,194 @@
   let attackStatusInFlight = null;
   let attackStatusLastAt = 0;
   let attackPanelHidden = false;
+  let attackFightResult = null; // { kind: 'win'|'loss'|'stalemate', respect, line, at }
+  let attackNextTarget = null; // { userId, name, level, intel, target } | null, or { none: true }
+  let attackNextLoading = false;
+  let attackLogObserver = null;
+  let attackLogFinder = null;
+  let attackLogList = null;
+  let attackLogAttachedAt = 0;
+  let attackLogScanTimer = null;
+  const attackLogSeenLines = new Set();
+  let ownBars = null; // { energyCurrent, energyMax, fullTime, fetchedAt }
+  let ownBarsLastAt = 0;
+  let ownBarsUnsupported = false;
+  const ATTACK_LOG_SELECTOR = 'ul[aria-describedby="log-header"]';
+  const OWN_BARS_REFRESH_MS = 60_000;
+
+  // Fight-result lines as Torn renders them in the attack log; only the page currently being viewed is read.
+  const FIGHT_FINISHERS = Object.freeze([
+    { re: /^(\S+) left (\S+) on the street(?:\s*\(\+([\d.]+)\))?/i, method: 'leave' },
+    { re: /^(\S+) hospitalized (\S+)(?:\s*\(\+([\d.]+)\))?/i, method: 'hospitalize' },
+    { re: /^(\S+) mugged (\S+)(?: and stole \$[\d,]+)?(?:\s*\(\+([\d.]+)\))?/i, method: 'mug' },
+    { re: /^(\S+) arrested (\S+)(?:\s*\(\+([\d.]+)\))?/i, method: 'arrest' },
+  ]);
+
+  function classifyFightLine(text, targetName) {
+    const line = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!line) return null;
+    const target = targetName ? String(targetName).toLowerCase() : '';
+    for (const { re, method } of FIGHT_FINISHERS) {
+      const match = line.match(re);
+      if (!match) continue;
+      const actor = String(match[1]).toLowerCase();
+      const subject = String(match[2]).toLowerCase();
+      const respect = match[3] !== undefined ? Number(match[3]) : null;
+      let kind = 'unknown';
+      if (actor === 'you') kind = 'win';
+      else if (subject === 'you') kind = 'loss';
+      else if (target && actor === target) kind = 'loss';
+      else if (target && subject === target) kind = 'win';
+      else if (respect !== null) kind = 'win'; // Only the attacker's own finishing hit carries respect.
+      return { kind, method, respect: Number.isFinite(respect) ? respect : null, line };
+    }
+    if (/\byou (?:lost|were (?:hospitalized|mugged|arrested|defeated)|have been defeated)\b/i.test(line)) return { kind: 'loss', method: 'defeat', respect: null, line };
+    if (/\bstalemate/i.test(line)) return { kind: 'stalemate', method: 'stalemate', respect: null, line };
+    if (/\b(?:escaped|ran away|fled the battle|timed out)\b/i.test(line)) return { kind: 'stalemate', method: 'escape', respect: null, line };
+    return null;
+  }
+
+  function scanAttackLog(list) {
+    attackLogScanTimer = null;
+    if (!list?.isConnected || attackFightResult) return;
+    const items = Array.from(list.querySelectorAll('li'));
+    for (const item of items) {
+      const text = String(item.innerText || item.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!text || attackLogSeenLines.has(text)) continue;
+      // Lines already on the page when the observer attached belong to an earlier fight; later ones wait for the next scan.
+      if (monotonicNowMs() - attackLogAttachedAt < 1_500) continue;
+      attackLogSeenLines.add(text);
+      const result = classifyFightLine(text, attackTargetProfile?.name);
+      if (!result || result.kind === 'unknown') continue;
+      onAttackFightFinished(result);
+      return;
+    }
+  }
+
+  function attachAttackLogObserver() {
+    if (attackLogObserver || attackLogFinder || typeof MutationObserver !== 'function') return;
+    const attach = list => {
+      if (!list || attackLogObserver) return;
+      attackLogList = list;
+      attackLogAttachedAt = monotonicNowMs();
+      for (const item of list.querySelectorAll('li')) {
+        const text = String(item.innerText || item.textContent || '').replace(/\s+/g, ' ').trim();
+        if (text) attackLogSeenLines.add(text);
+      }
+      attackLogObserver = new MutationObserver(() => {
+        if (attackLogScanTimer) return;
+        attackLogScanTimer = setTimeout(() => scanAttackLog(list), 150);
+      });
+      attackLogObserver.observe(list, { childList: true, subtree: true, characterData: true });
+      if (attackLogFinder) { attackLogFinder.disconnect(); attackLogFinder = null; }
+    };
+    const existing = document.querySelector(ATTACK_LOG_SELECTOR);
+    if (existing) { attach(existing); return; }
+    attackLogFinder = new MutationObserver(() => {
+      const list = document.querySelector(ATTACK_LOG_SELECTOR);
+      if (list) attach(list);
+    });
+    attackLogFinder.observe(document.body || document.documentElement, { childList: true, subtree: true });
+  }
+
+  function detachAttackLogObserver() {
+    if (attackLogObserver) { attackLogObserver.disconnect(); attackLogObserver = null; }
+    if (attackLogFinder) { attackLogFinder.disconnect(); attackLogFinder = null; }
+    if (attackLogScanTimer) { clearTimeout(attackLogScanTimer); attackLogScanTimer = null; }
+    attackLogList = null;
+  }
+
+  function onAttackFightFinished(result) {
+    attackFightResult = { ...result, at: Date.now() };
+    incStat('fightResultsCaptured');
+    renderAttackPanel();
+    // The API record lags the page by a few seconds; ingest twice so the observed verdict lands before the next fight.
+    setTimeout(() => ingestRecentAttacksOnAttackPage(), 4_000);
+    setTimeout(() => ingestRecentAttacksOnAttackPage(), 15_000);
+    loadNextTarget();
+  }
+
+  function ingestMembersSnapshot(members) {
+    statusByUser.clear();
+    lastActionByUser.clear();
+    memberMetaByUser.clear();
+    const ids = [];
+    for (const member of Array.isArray(members) ? members : []) {
+      const id = Number(member?.id);
+      if (!Number.isFinite(id)) continue;
+      ids.push(id);
+      if (member?.status) statusByUser.set(id, member.status);
+      if (member?.last_action) lastActionByUser.set(id, member.last_action);
+      const level = Number(member?.level);
+      memberMetaByUser.set(id, {
+        hasEarlyDischarge: Boolean(member?.has_early_discharge),
+        isRevivable: Boolean(member?.is_revivable),
+        reviveSetting: String(member?.revive_setting || 'Unknown'),
+        level: Number.isFinite(level) && level > 0 ? level : null,
+        name: typeof member?.name === 'string' ? member.name : '',
+      });
+    }
+    return ids;
+  }
+
+  async function loadNextTarget() {
+    if (attackNextLoading || !intelEnabled() || !apiKey || apiPermanentlyDisabled) return;
+    attackNextLoading = true;
+    renderAttackPanel();
+    try {
+      let factionId = recentProfileByUser.get(attackTargetId)?.factionId || null;
+      if (!factionId) {
+        const data = await apiGet(`/user/${attackTargetId}/profile`);
+        if (data?.profile) rememberProfileFacts(attackTargetId, data.profile);
+        factionId = recentProfileByUser.get(attackTargetId)?.factionId || null;
+      }
+      if (!factionId) { attackNextTarget = { none: true, reason: 'target has no faction' }; return; }
+      const before = monotonicNowMs();
+      const data = await apiGet(`/faction/${factionId}/members`, { cacheBust: true });
+      const ids = ingestMembersSnapshot(data?.members);
+      lastFreshSnapshotAt = Date.now();
+      lastFreshSnapshotPerfAt = before;
+      factionLiveReady = true;
+      await refreshOwnChain().catch(() => { /* handled inside */ });
+      const bonusNext = Boolean(getChainSnapshot()?.bonusNext);
+      const best = pickBestCandidate(ids.filter(id => id !== attackTargetId), bonusNext, { applyFilters: false });
+      if (!best) {
+        attackNextTarget = { none: true, reason: 'no green target with a safe verdict right now' };
+      } else {
+        const meta = memberMetaByUser.get(best.userId) || {};
+        attackNextTarget = { userId: best.userId, name: meta.name || `#${best.userId}`, level: meta.level, intel: best.intel, target: best.target, bonusNext };
+      }
+    } catch (err) {
+      attackNextTarget = { none: true, reason: 'could not read the enemy roster' };
+      if (err?.message !== 'API backoff active.') console.warn(`[${SCRIPT}] Could not pick the next target`, err);
+    } finally {
+      attackNextLoading = false;
+      renderAttackPanel();
+    }
+  }
+
+  async function refreshOwnBars() {
+    if (!apiKey || apiPermanentlyDisabled || ownBarsUnsupported) return ownBars;
+    if (Date.now() - ownBarsLastAt < OWN_BARS_REFRESH_MS - 1_000) return ownBars;
+    if (Date.now() < globalBackoffUntil) return ownBars;
+    ownBarsLastAt = Date.now();
+    try {
+      const data = await apiGet('/user/bars', { cacheBust: true });
+      const energy = data?.bars?.energy;
+      if (energy) {
+        ownBars = {
+          energyCurrent: Math.max(0, Number(energy.current) || 0),
+          energyMax: Math.max(0, Number(energy.maximum) || 0),
+          fullTime: Math.max(0, Number(energy.full_time ?? energy.fulltime) || 0),
+          fetchedAt: Date.now(),
+        };
+      }
+    } catch (err) {
+      if (Number(err?.code) === 16 || Number(err?.code) === 7) ownBarsUnsupported = true;
+      else if (err?.message !== 'API backoff active.') console.warn(`[${SCRIPT}] Could not read own energy`, err);
+    }
+    return ownBars;
+  }
 
   function attackTargetSecondsLeft() {
     const until = getStatusUntil(attackTargetProfile?.status);
@@ -4992,6 +5215,7 @@
         registerApiSuccess();
         // Chain state is throttled to 30 s internally; riding the status poll keeps the chip current for teammates' hits.
         await refreshOwnChain().catch(() => { /* handled inside */ });
+        await refreshOwnBars().catch(() => { /* handled inside */ });
       } catch (err) {
         if (err?.message !== 'API backoff active.') {
           registerApiFailure(err);
@@ -5035,6 +5259,9 @@
     const chain = document.createElement('span');
     chain.className = 'two-context-chip two-chain-chip';
     chain.hidden = true;
+    const energy = document.createElement('span');
+    energy.className = 'two-context-chip two-energy-chip';
+    energy.hidden = true;
     const toggle = document.createElement('button');
     toggle.type = 'button';
     toggle.className = 'two-attack-toggle';
@@ -5058,17 +5285,23 @@
       panel.hidden = true;
       pauseAttackPage(); // A hidden panel must not keep spending API budget.
     });
-    head.append(name, verdict, status, chain, toggle, close);
+    head.append(name, verdict, status, chain, energy, toggle, close);
+
+    const next = document.createElement('div');
+    next.className = 'two-attack-next';
+    next.hidden = true;
 
     const detail = document.createElement('div');
     detail.className = 'two-attack-detail';
     detail.hidden = true;
 
-    panel.append(head, detail);
+    panel.append(head, next, detail);
     panel.__twoName = name;
     panel.__twoVerdict = verdict;
     panel.__twoStatus = status;
     panel.__twoChain = chain;
+    panel.__twoEnergy = energy;
+    panel.__twoNext = next;
     panel.__twoDetail = detail;
     (document.body || document.documentElement).appendChild(panel);
     attackPanel = panel;
@@ -5110,6 +5343,8 @@
     panel.__twoStatus.title = ageSec === null ? 'Waiting for the first status check' : `Status from the Torn API ${ageSec}s ago`;
 
     renderChainChip(panel.__twoChain);
+    renderEnergyChip(panel.__twoEnergy);
+    renderAttackNext(panel.__twoNext);
 
     const detail = panel.__twoDetail;
     detail.hidden = !attackPanelExpanded;
@@ -5125,9 +5360,76 @@
     }
   }
 
+  function renderEnergyChip(chip) {
+    if (!chip) return;
+    if (!ownBars) { if (!chip.hidden) chip.hidden = true; return; }
+    const hits = Math.floor(ownBars.energyCurrent / 25);
+    const text = `E ${ownBars.energyCurrent} · ${hits} hit${hits === 1 ? '' : 's'}`;
+    if (chip.textContent !== text) {
+      chip.textContent = text;
+      chip.hidden = false;
+      chip.classList.toggle('two-chip-urgent', hits === 0);
+      const fullIn = ownBars.fullTime > 0 ? `, full in ${formatDurationCompact(ownBars.fullTime)}` : '';
+      chip.title = `Energy ${ownBars.energyCurrent}/${ownBars.energyMax}${fullIn}. One attack costs 25.`;
+    }
+  }
+
+  function renderAttackNext(row) {
+    if (!row) return;
+    const result = attackFightResult;
+    if (!result) { if (!row.hidden) row.hidden = true; return; }
+    row.hidden = false;
+    const resultText = result.kind === 'win'
+      ? `WIN${result.respect !== null ? ` +${result.respect.toFixed(2)}` : ''}`
+      : result.kind === 'loss' ? 'LOSS' : 'STALEMATE';
+    const signature = `${resultText}|${attackNextLoading ? 'loading' : ''}|${attackNextTarget?.userId || ''}|${attackNextTarget?.reason || ''}|${attackNextTarget?.intel?.evLabel || ''}`;
+    if (row.dataset.twoSignature === signature) return;
+    row.dataset.twoSignature = signature;
+    row.replaceChildren();
+    const resultChip = document.createElement('span');
+    resultChip.className = `two-attack-result two-attack-result-${result.kind}`;
+    resultChip.textContent = resultText;
+    resultChip.title = result.line;
+    row.appendChild(resultChip);
+    const label = document.createElement('span');
+    label.className = 'two-attack-next-label';
+    label.textContent = 'NEXT';
+    row.appendChild(label);
+    if (attackNextLoading) {
+      const wait = document.createElement('span');
+      wait.className = 'two-attack-next-none';
+      wait.textContent = 'checking the roster…';
+      row.appendChild(wait);
+      return;
+    }
+    if (!attackNextTarget || attackNextTarget.none) {
+      const none = document.createElement('span');
+      none.className = 'two-attack-next-none';
+      none.textContent = attackNextTarget?.reason || 'no target';
+      row.appendChild(none);
+      return;
+    }
+    const link = document.createElement('a');
+    link.className = 'two-attack-next-link';
+    link.href = `/loader.php?sid=attack&user2ID=${attackNextTarget.userId}`;
+    const level = Number.isFinite(Number(attackNextTarget.level)) ? ` [${attackNextTarget.level}]` : '';
+    link.textContent = `${attackNextTarget.name}${level} ▸`;
+    link.title = attackNextTarget.bonusNext ? 'Safest proven target for the bonus hit' : 'Highest expected value among green targets right now';
+    row.appendChild(link);
+    const badge = document.createElement('span');
+    badge.className = 'two-intel-badge';
+    renderIntelBadge(badge, attackNextTarget.userId, attackNextTarget.target);
+    row.appendChild(badge);
+  }
+
   function attackPageTick() {
     attackTickTimer = null;
     if (!attackPageVisible()) return;
+    // Torn may remount the log list when the fight starts or ends; re-bind rather than watch a detached node.
+    if (attackLogObserver && attackLogList && !attackLogList.isConnected) {
+      detachAttackLogObserver();
+      attachAttackLogObserver();
+    }
     renderAttackPanel();
     attackTickTimer = setTimeout(attackPageTick, 1000);
   }
@@ -5137,11 +5439,14 @@
     attackStatusTimer = null;
     if (attackTickTimer) clearTimeout(attackTickTimer);
     attackTickTimer = null;
+    detachAttackLogObserver();
   }
 
   function resumeAttackPage() {
     if (!attackPageVisible() || PAGE_MODE !== 'attack') return;
     if (!attackTickTimer) attackPageTick();
+    attachAttackLogObserver();
+    refreshOwnBars().then(() => renderAttackPanel()).catch(() => { /* handled inside */ });
     // pageshow fires on the initial load too; do not double up a poll that is already pending or fresh.
     const statusAgeMs = attackStatusLastAt > 0 ? monotonicNowMs() - attackStatusLastAt : Number.POSITIVE_INFINITY;
     if (!attackStatusTimer && !attackStatusInFlight && statusAgeMs >= attackStatusRefreshMs()) refreshAttackTargetStatus();
