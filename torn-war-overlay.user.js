@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.18.3
+// @version      0.18.4
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -34,15 +34,15 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0183__';
+  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0184__';
   if (window[INSTANCE_KEY]) {
-    console.warn(`[${SCRIPT}] v0.18.3 is already running; duplicate injection ignored.`);
+    console.warn(`[${SCRIPT}] v0.18.4 is already running; duplicate injection ignored.`);
     return;
   }
   window[INSTANCE_KEY] = true;
 
   const API_BASE = 'https://api.torn.com/v2';
-  const API_COMMENT = 'two-v0.18.3';
+  const API_COMMENT = 'two-v0.18.4';
   const PDA_API_KEY = '###PDA-APIKEY###';
 
   const KEY_STORAGE = 'two.apiKey.v1';
@@ -680,7 +680,7 @@
       : null;
     return {
       script: SCRIPT,
-      version: '0.18.3',
+      version: '0.18.4',
       generatedAt: new Date().toISOString(),
       active: isActiveView(),
       factionId: Number.isFinite(Number(activeFactionId)) ? Number(activeFactionId) : null,
@@ -749,7 +749,7 @@
 
   function showDiagnosticSnapshot() {
     const payload = JSON.stringify(getDiagnosticSnapshot(), null, 2);
-    window.prompt(`${SCRIPT} v0.18.3 diagnostics - copy this text if troubleshooting is needed:`, payload);
+    window.prompt(`${SCRIPT} v0.18.4 diagnostics - copy this text if troubleshooting is needed:`, payload);
     return payload;
   }
 
@@ -1965,6 +1965,7 @@
 
     const key = String(attack.defenderId);
     const existing = opponentIntel.opponents[key];
+    if (Array.isArray(existing?.r) && existing.r.some(sample => Number(sample?.i) === attack.id)) { incStat('intelAttacksSkipped'); return false; }
     const record = existing && typeof existing === 'object'
       ? existing
       : { u: 0, w: 0, l: 0, n: 0, rw: 0, r: [], ff: null, ffAt: 0, bss: null, bssAt: 0, bssCap: false, lvl: null };
@@ -1999,7 +2000,8 @@
       }
     }
 
-    record.r.push({ t: attack.ended, k: kind, s: attack.respect, f: attack.ff, c: attack.chain, w: attack.warMod, rw: attack.isRankedWar ? 1 : 0 });
+    // Samples carry the attack id so a second page (faction list and attack page open together) cannot double-record one fight.
+    record.r.push({ i: attack.id, t: attack.ended, k: kind, s: attack.respect, f: attack.ff, c: attack.chain, w: attack.warMod, rw: attack.isRankedWar ? 1 : 0 });
     record.r.sort((a, b) => Number(b?.t || 0) - Number(a?.t || 0));
     if (record.r.length > INTEL_RECENT_SAMPLES) record.r.length = INTEL_RECENT_SAMPLES;
 
@@ -5047,6 +5049,32 @@
     else if (!attackStatusTimer && !attackStatusInFlight) scheduleAttackStatusRefresh(Math.max(500, attackStatusRefreshMs() - statusAgeMs));
   }
 
+  // The faction page is the only place that polls attack history. Ingest the last few hours once here so a fight
+  // finished a minute ago already shows as an observed verdict on the next attack page.
+  async function ingestRecentAttacksOnAttackPage() {
+    if (!intelEnabled() || !apiKey || apiPermanentlyDisabled) return;
+    try {
+      const capable = await ensureAttackHistoryCapability();
+      if (!capable) return;
+      await refreshSelfStats(); // Own battle stats must be known before Fair Fight can be inverted into a score.
+      const data = await apiGet('/user/attacks', {
+        query: { filters: 'outgoing', sort: 'DESC', limit: 25, from: Math.max(0, Math.floor(serverNowSec()) - 6 * 3600) },
+        cacheBust: true,
+        keyOverride: attackApiKey || null,
+      });
+      let recorded = 0;
+      for (const raw of Array.isArray(data?.attacks) ? data.attacks : []) {
+        const attack = normalizeAttack(raw);
+        if (attack && recordAttackIntel(attack)) recorded += 1;
+      }
+      if (recorded > 0) flushOpponentIntel();
+      renderAttackPanel();
+    } catch (err) {
+      if (Number(err?.code) === 16 || Number(err?.code) === 7) attackHistoryFeatureState = 'unsupported';
+      else if (err?.message !== 'API backoff active.') console.warn(`[${SCRIPT}] Could not ingest recent attacks on the attack page`, err);
+    }
+  }
+
   async function initAttackPage() {
     attackTargetId = Number(new URLSearchParams(location.search).get('user2ID'));
     if (!Number.isFinite(attackTargetId) || attackTargetId <= 0) return;
@@ -5065,6 +5093,7 @@
       refreshSelfStats().then(() => renderAttackPanel()).catch(() => { /* handled inside */ });
       refreshOwnProxy().then(() => renderAttackPanel()).catch(() => { /* handled inside */ });
       if (!getSignedUp(attackTargetId)) fetchProfile(attackTargetId).then(() => renderAttackPanel()).catch(err => console.warn(`[${SCRIPT}] Could not fetch target age`, err));
+      ingestRecentAttacksOnAttackPage();
       if (!getStrengthProxy(attackTargetId) && !strengthUnsupported) {
         fetchStrength(attackTargetId).then(() => renderAttackPanel()).catch(err => console.warn(`[${SCRIPT}] Could not fetch target public stats`, err));
       }

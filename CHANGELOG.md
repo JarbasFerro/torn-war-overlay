@@ -4,6 +4,11 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.18.4 - Attack page learns from your last fights
+
+- The attack page now reads your outgoing attacks from the last six hours once on load, so a fight you finished a minute ago already shows as an observed verdict instead of the estimate. One Limited-key request.
+- Fight samples carry the attack id, so the faction list and an attack page open together cannot record the same fight twice.
+
 ## 0.18.3 - Withheld estimates are labelled
 
 - When the estimate is too uncertain to call, the badge now shows `~?` next to the EV instead of leaving the verdict blank.
