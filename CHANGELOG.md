@@ -7,7 +7,7 @@ The project is currently in release-candidate status. Version numbering before v
 ## 0.22.1 - Losses show up
 
 - The attack page now recognises Torn's defeat line, "X lost to Y", so a lost fight shows `LOSS` and triggers NEXT like a win does.
-- The war-scoped result dots and the "This war" line in the row sheet include losses and stalemates. Torn only flags scoring hits as ranked-war attacks, so those were being dropped; any attack on a member of the enemy faction since the war started now counts.
+- The war-scoped result dots and the "This war" line in the row sheet include losses and stalemates. A lost fight was dropped by the filter that required Torn's ranked-war flag; the flag's behaviour on non-scoring attacks is not documented, so the filter now also accepts any attack on a member of the enemy faction since the war started.
 
 ## 0.22.0 - Leave or Hospitalize hint
 
