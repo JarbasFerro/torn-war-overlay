@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.21.0
+// @version      0.22.0
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -34,15 +34,15 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0210__';
+  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0220__';
   if (window[INSTANCE_KEY]) {
-    console.warn(`[${SCRIPT}] v0.21.0 is already running; duplicate injection ignored.`);
+    console.warn(`[${SCRIPT}] v0.22.0 is already running; duplicate injection ignored.`);
     return;
   }
   window[INSTANCE_KEY] = true;
 
   const API_BASE = 'https://api.torn.com/v2';
-  const API_COMMENT = 'two-v0.21.0';
+  const API_COMMENT = 'two-v0.22.0';
   const PDA_API_KEY = '###PDA-APIKEY###';
 
   const KEY_STORAGE = 'two.apiKey.v1';
@@ -706,7 +706,7 @@
       : null;
     return {
       script: SCRIPT,
-      version: '0.21.0',
+      version: '0.22.0',
       generatedAt: new Date().toISOString(),
       active: isActiveView(),
       factionId: Number.isFinite(Number(activeFactionId)) ? Number(activeFactionId) : null,
@@ -775,7 +775,7 @@
 
   function showDiagnosticSnapshot() {
     const payload = JSON.stringify(getDiagnosticSnapshot(), null, 2);
-    window.prompt(`${SCRIPT} v0.21.0 diagnostics - copy this text if troubleshooting is needed:`, payload);
+    window.prompt(`${SCRIPT} v0.22.0 diagnostics - copy this text if troubleshooting is needed:`, payload);
     return payload;
   }
 
@@ -1391,6 +1391,7 @@
     facts.push(Number.isFinite(ageInfo.exactYears) ? `Account age ${ageInfo.exactYears.toFixed(2)} years` : ageInfo.hint === 'candidate' ? 'Account age: inside the candidate window, exact age loading' : ageInfo.hint === 'old' ? 'Account age: outside the target window' : 'Account age unknown');
     if (risk.hasEarlyDischarge) facts.push('Eligible for Early Discharge (may leave hospital early)');
     if (risk.isRevivable) facts.push(`Revivable (${risk.reviveSetting})`);
+    if (intelEnabled()) { const hint = finishHintForUser(userId); facts.push(`If you win: ${hint.action === 'HOSP' ? 'Hospitalize' : 'Leave'} (${hint.reason})`); }
     const early = getEarlyExit(userId);
     if (early) facts.push(`Left hospital about ${formatDurationCompact(early.leadSec)} early a few minutes ago`);
     if (bestTargetUserId === userId) facts.unshift(`★ BEST: ${bestTargetReason}`);
@@ -2100,8 +2101,39 @@
       rank: typeof profile.rank === 'string' ? profile.rank : null,
       level: Number.isFinite(Number(profile.level)) ? Number(profile.level) : null,
       lastAction: Number.isFinite(Number(profile.last_action?.timestamp)) ? Number(profile.last_action.timestamp) : null,
+      lastActionStatus: typeof profile.last_action?.status === 'string' ? profile.last_action.status.toLowerCase() : '',
       at: Date.now(),
     });
+  }
+
+  // Leave or Hospitalize after a win. Published war guidance (FF Scouter, Nuke Family): leave offline farm targets so they
+  // rotate back for another hit; hospitalize active enemies so they burn medical cooldown and stop scoring against you.
+  const HOSP_HINT_RECENT_SEC = 15 * 60;
+
+  function finishHintFor({ activityStatus = '', inactivitySec = null, verdict = null, hasEarlyDischarge = false } = {}) {
+    const status = String(activityStatus || '').toLowerCase();
+    const recentlyActive = status === 'online' || (Number.isFinite(Number(inactivitySec)) && inactivitySec !== null && Number(inactivitySec) <= HOSP_HINT_RECENT_SEC);
+    if (recentlyActive) {
+      return { action: 'HOSP', reason: status === 'online' ? 'they are online now: a long hospital stay keeps them off your faction' : 'active in the last 15 minutes: hospitalize so they burn medical cooldown' };
+    }
+    if (verdict === 'RISKY' || verdict === 'AVOID') {
+      return { action: 'HOSP', reason: 'strong opponent: lock them away rather than let them rotate back' };
+    }
+    if (!status) return { action: 'LEAVE', reason: 'activity unknown; leaving keeps them available for another hit soon' };
+    return { action: 'LEAVE', reason: `offline: they will be back in 15 to 30 minutes for another ${verdict ? verdict.toLowerCase() : ''} hit${hasEarlyDischarge ? ' (they could discharge early either way)' : ''}` };
+  }
+
+  function finishHintForUser(userId) {
+    const activity = getActivityInfo(userId);
+    const remembered = recentProfileByUser.get(userId);
+    let activityStatus = activity.status;
+    let inactivitySec = activity.inactivitySec;
+    if (!activityStatus && remembered) {
+      activityStatus = remembered.lastActionStatus || '';
+      inactivitySec = remembered.lastAction ? Math.max(0, Math.floor(serverNowSec() - remembered.lastAction)) : null;
+    }
+    const intel = intelEnabled() ? getOpponentIntel(userId) : null;
+    return finishHintFor({ activityStatus, inactivitySec, verdict: intel?.verdict ?? null, hasEarlyDischarge: getMemberRiskInfo(userId).hasEarlyDischarge });
   }
 
   async function fetchStrength(userId) {
@@ -4657,6 +4689,8 @@
       .two-context-chip.two-chip-positive { color:#c9ffa0; border-color:rgba(137,255,67,.45); background:rgba(37,70,17,.45); }
       .two-context-chip.two-chip-negative { color:#ffaaa0; border-color:rgba(255,95,78,.55); background:rgba(75,24,18,.5); }
       .two-context-chip.two-chip-urgent { color:#ffe38a; border-color:rgba(255,205,61,.6); background:rgba(83,61,8,.55); }
+      .two-context-chip.two-chip-hosp { color:#ffb1a6; border-color:rgba(255,95,78,.6); background:rgba(75,24,18,.55); }
+      .two-context-chip.two-chip-leave { color:#c9ffa0; border-color:rgba(137,255,67,.45); background:rgba(37,70,17,.45); }
       .two-context-chip.two-chip-bonus { color:#fff7d1; border-color:rgba(255,224,102,.95); background:rgba(92,70,8,.9); animation:two-chip-pulse 1s ease-in-out infinite alternate; }
 
       .two-attack-panel { position:fixed; top:calc(env(safe-area-inset-top, 0px) + 54px); right:6px; z-index:99999; max-width:min(92vw,420px); box-sizing:border-box; padding:4px 6px; border-radius:6px; border:1px solid rgba(255,255,255,.18); background:rgba(24,24,24,.94); color:#ddd; font:700 10px/1.3 Arial,sans-serif; box-shadow:0 2px 10px rgba(0,0,0,.5); pointer-events:auto; }
@@ -5048,6 +5082,11 @@
       const unbanded = estimateScoreFromProxy({ xan: 662, ref: 124, drink: 4, boost: 0, se: 0, won: 2052, lost: 253, draw: 0, revives: 0, activitySec: 262 * 7200, donatorDays: 0 }, 400);
       if (!unbanded || unbanded.band || unbanded.clippedByBand || Math.abs(unbanded.stats - unbanded.energyStats) > 1e-6) faults.push('estimate without rank');
       if (Math.abs(winProbabilityFromRatio(1) - 0.5) > 1e-9 || !(winProbabilityFromRatio(0.7) > 0.85) || !(winProbabilityFromRatio(1.2) < 0.25) || winProbabilityFromRatio(null) !== null) faults.push('win probability curve');
+      if (finishHintFor({ activityStatus: 'online', verdict: 'EASY' }).action !== 'HOSP') faults.push('finish hint online');
+      if (finishHintFor({ activityStatus: 'idle', inactivitySec: 300, verdict: 'GOOD' }).action !== 'HOSP') faults.push('finish hint recent');
+      if (finishHintFor({ activityStatus: 'offline', inactivitySec: 3 * 3600, verdict: 'GOOD' }).action !== 'LEAVE') faults.push('finish hint offline farm');
+      if (finishHintFor({ activityStatus: 'offline', inactivitySec: 3 * 3600, verdict: 'AVOID' }).action !== 'HOSP') faults.push('finish hint strong');
+      if (finishHintFor({}).action !== 'LEAVE') faults.push('finish hint unknown');
       const win = classifyFightLine('Jarbas left RadiantRedneck on the street (+3.18)', 'RadiantRedneck');
       if (!win || win.kind !== 'win' || win.method !== 'leave' || Math.abs(win.respect - 3.18) > 1e-9) faults.push('fight line win');
       const hospLoss = classifyFightLine('GatecrashR hospitalized Jarbas', 'GatecrashR');
@@ -5416,6 +5455,9 @@
     const energy = document.createElement('span');
     energy.className = 'two-context-chip two-energy-chip';
     energy.hidden = true;
+    const finish = document.createElement('span');
+    finish.className = 'two-context-chip two-finish-chip';
+    finish.hidden = true;
     const toggle = document.createElement('button');
     toggle.type = 'button';
     toggle.className = 'two-attack-toggle';
@@ -5439,7 +5481,7 @@
       panel.hidden = true;
       pauseAttackPage(); // A hidden panel must not keep spending API budget.
     });
-    head.append(name, verdict, status, chain, energy, toggle, close);
+    head.append(name, verdict, status, finish, chain, energy, toggle, close);
 
     const next = document.createElement('div');
     next.className = 'two-attack-next';
@@ -5455,6 +5497,7 @@
     panel.__twoStatus = status;
     panel.__twoChain = chain;
     panel.__twoEnergy = energy;
+    panel.__twoFinish = finish;
     panel.__twoNext = next;
     panel.__twoDetail = detail;
     (document.body || document.documentElement).appendChild(panel);
@@ -5498,6 +5541,7 @@
 
     renderChainChip(panel.__twoChain);
     renderEnergyChip(panel.__twoEnergy);
+    renderFinishChip(panel.__twoFinish, userId);
     renderAttackNext(panel.__twoNext);
 
     const detail = panel.__twoDetail;
@@ -5511,6 +5555,20 @@
         row.textContent = line;
         return row;
       }));
+    }
+  }
+
+  function renderFinishChip(chip, userId) {
+    if (!chip) return;
+    if (!intelEnabled() || attackFightResult) { if (!chip.hidden) chip.hidden = true; return; }
+    const hint = finishHintForUser(userId);
+    const text = hint.action;
+    if (chip.textContent !== text || chip.title !== hint.reason) {
+      chip.textContent = text;
+      chip.title = `If you win: ${hint.action === 'HOSP' ? 'Hospitalize' : 'Leave'}. ${hint.reason.charAt(0).toUpperCase()}${hint.reason.slice(1)}. Never mug in a ranked war: 25% less score and it invites retaliation.`;
+      chip.classList.toggle('two-chip-hosp', hint.action === 'HOSP');
+      chip.classList.toggle('two-chip-leave', hint.action === 'LEAVE');
+      chip.hidden = false;
     }
   }
 
@@ -5650,7 +5708,7 @@
     if (intelEnabled()) {
       refreshSelfStats().then(() => renderAttackPanel()).catch(() => { /* handled inside */ });
       refreshOwnProxy().then(() => renderAttackPanel()).catch(() => { /* handled inside */ });
-      if (!getSignedUp(attackTargetId)) fetchProfile(attackTargetId).then(() => renderAttackPanel()).catch(err => console.warn(`[${SCRIPT}] Could not fetch target age`, err));
+      if (!getSignedUp(attackTargetId) || !recentProfileByUser.has(attackTargetId)) fetchProfile(attackTargetId, { force: true }).then(() => renderAttackPanel()).catch(err => console.warn(`[${SCRIPT}] Could not fetch target age`, err));
       ingestRecentAttacksOnAttackPage();
       if (!getStrengthProxy(attackTargetId) && !strengthUnsupported) {
         fetchStrength(attackTargetId).then(() => renderAttackPanel()).catch(err => console.warn(`[${SCRIPT}] Could not fetch target public stats`, err));

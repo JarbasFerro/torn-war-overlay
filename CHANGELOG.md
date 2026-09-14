@@ -4,6 +4,10 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.22.0 - Leave or Hospitalize hint
+
+- The attack panel now shows `LEAVE` or `HOSP` before the fight, and the row sheet says "If you win: Leave/Hospitalize" with the reason. The rule follows published war guidance: leave offline farm targets so they rotate back in 15 to 30 minutes for another hit; hospitalize anyone online or active in the last 15 minutes, and strong opponents, so they burn medical cooldown and stop scoring against your faction. The tooltip also reminds you never to mug in a ranked war. The hint disappears once the fight is over.
+
 ## 0.21.0 - Tap-to-explain on the faction list
 
 - Tapping the badges on any enemy row opens a bottom sheet with the target's name and level, verdict and `EV`, live status or hospital countdown, whether it is a green or yellow target under your rules, activity, exact age, Early Discharge and revive flags, this war's results against them, the full explanation of the estimate, and an "Open attack page" link. Tooltips never show on touch devices, so this is how Torn PDA users reach the reasons. Tap outside the sheet or `×` to close; it closes automatically when the page goes to the background.

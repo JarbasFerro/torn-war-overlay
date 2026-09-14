@@ -20,7 +20,7 @@ Keep the existing namespace stable so userscript managers recognise updates corr
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.21.0
+// @version      0.22.0
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -73,7 +73,7 @@ The following is ready to paste into the Greasy Fork description field.
   <li>Personal intel per opponent learned from your own attacks: observed Fair Fight, expected score per hit, <code>EV</code> per 25 energy and a <code>PROVEN | LIKELY | UNKNOWN | RISK | CHANGED</code> confidence label with an explanation on tap/hover.</li>
   <li>A single <code>★ BEST</code> recommendation among current green targets; switches to the safest proven target when your next chain hit is a bonus hit.</li>
   <li>Tap any row's badges for a bottom sheet with the full explanation, live status, age, activity, this war's results and a link to the attack page.</li>
-  <li>The same verdict, EV, hospital countdown, chain state and your energy in a small floating panel on the attack page, with a tap-to-expand explanation. After each fight it shows the result and a <code>NEXT</code> link to the best green target on the roster.</li>
+  <li>The same verdict, EV, hospital countdown, chain state and your energy in a small floating panel on the attack page, with a tap-to-expand explanation. Before the fight it hints <code>LEAVE</code> or <code>HOSP</code>; after each fight it shows the result and a <code>NEXT</code> link to the best green target on the roster.</li>
   <li>Adaptive API polling, caching and incremental attack-history updates to reduce unnecessary API usage.</li>
 </ul>
 
@@ -210,4 +210,4 @@ Before the first public release:
 
 **v0.13.1 was the first Greasy Fork publication candidate.** It is the v0.13 release-candidate code with finalized distribution metadata and a canonical GitHub source file; no tactical behavior was changed for this distribution release.
 
-**v0.14.0** added personal intel and the ToS disclosure table above; **v0.15.0** added match verdicts; **v0.16.0** rebuilt the verdict estimate on Torn's gym formula with self-calibration; **v0.17.0** adds the attack-page panel; **v0.18.0** adds filters and OUT EARLY labels; **v0.19.0** bounds estimates by Torn's rank band and drops the toolbar chips; **v0.20.0** adds fight-result capture and the NEXT target; **v0.21.0** adds the tap-to-explain sheet. Publish only after a real ranked-war validation pass on Torn PDA, and paste the updated description (including the ToS table) into the listing when the version is synced.
+**v0.14.0** added personal intel and the ToS disclosure table above; **v0.15.0** added match verdicts; **v0.16.0** rebuilt the verdict estimate on Torn's gym formula with self-calibration; **v0.17.0** adds the attack-page panel; **v0.18.0** adds filters and OUT EARLY labels; **v0.19.0** bounds estimates by Torn's rank band and drops the toolbar chips; **v0.20.0** adds fight-result capture and the NEXT target; **v0.21.0** adds the tap-to-explain sheet; **v0.22.0** adds the Leave/Hospitalize hint. Publish only after a real ranked-war validation pass on Torn PDA, and paste the updated description (including the ToS table) into the listing when the version is synced.
