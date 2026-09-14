@@ -4,6 +4,12 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.18.2 - Growth curve retuned on live evidence
+
+- The strength estimate assumed an optimal trainer at a top gym, which put a 262-active-day account with 662 xanax at 680 million stats. Torn PDA's own estimate on the same screen said 2 to 25 million and the user's fights agreed. The growth rate is now about a quarter of the optimal figure, stats start near 50k and reach the 200M cap after roughly 550k gym energy; a live anchor is checked by the self-tests.
+- Plausible ranges are wider for young accounts (about a factor of six on stats) and the self-calibration can correct down to 0.2 on score instead of 0.33.
+- The AVOID reason no longer claims "you lost your latest fight" when no fight is recorded; it now says why the verdict is AVOID in each case.
+
 ## 0.18.1 - Fair Fight from wins only
 
 - Fixed a live-war bug: Torn reports a Fair Fight of 1.00 on lost, stalemated, escaped and interrupted attacks because no respect was earned. The script treated that as a real observation, overwrote the genuine value from an earlier win, and concluded the opponent had zero strength (`score ratio 0.00`, EV collapsed). Only winning hits now teach an opponent's strength, and stored 1.00 values from earlier versions are ignored until the next win.

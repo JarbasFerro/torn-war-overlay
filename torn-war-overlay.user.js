@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.18.1
+// @version      0.18.2
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -34,15 +34,15 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0181__';
+  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0182__';
   if (window[INSTANCE_KEY]) {
-    console.warn(`[${SCRIPT}] v0.18.1 is already running; duplicate injection ignored.`);
+    console.warn(`[${SCRIPT}] v0.18.2 is already running; duplicate injection ignored.`);
     return;
   }
   window[INSTANCE_KEY] = true;
 
   const API_BASE = 'https://api.torn.com/v2';
-  const API_COMMENT = 'two-v0.18.1';
+  const API_COMMENT = 'two-v0.18.2';
   const PDA_API_KEY = '###PDA-APIKEY###';
 
   const KEY_STORAGE = 'two.apiKey.v1';
@@ -110,19 +110,24 @@
   const DONATOR_EXTRA_ENERGY_PER_DAY = 240;
   const ACTIVE_SECONDS_PER_DAY = 2 * 3600; // Two hours of recorded activity counts as one day of collecting natural energy.
   // Torn's gym formula: stats grow exponentially with energy until the 50M-per-stat cap, then roughly linearly.
+  // Growth curve anchored on live observations (14 Sep 2026): a 262-active-day account with 662 xanax sits at
+  // 2M-25M stats (Torn PDA estimate, confirmed by fights), not the 680M the optimal-trainer rate predicted.
+  // Typical players train at low gyms with modest happiness, so the exponential rate is about a quarter of the
+  // George's-gym figure. Stats start near 50k and reach the 200M cap after ~550k gym energy.
   const STATS_AT_CAP = 200_000_000;
-  const ENERGY_AT_CAP = 125_000;
-  const EXPONENTIAL_RATE_PER_ENERGY = 4.4e-5;
+  const STARTING_TOTAL_STATS = 50_000;
+  const EXPONENTIAL_RATE_PER_ENERGY = 1.5e-5;
+  const ENERGY_AT_CAP = Math.log(STATS_AT_CAP / STARTING_TOTAL_STATS) / EXPONENTIAL_RATE_PER_ENERGY; // ≈ 553k
   const LINEAR_STATS_PER_ENERGY = 2_500;
-  const MIN_TOTAL_STATS = 1_500_000;
+  const MIN_TOTAL_STATS = STARTING_TOTAL_STATS;
   const STAT_ENHANCER_MULTIPLIER = 1.01;
   const STAT_ENHANCER_MAX = 1_000;
   const STATS_PER_SCORE_SQUARED = 0.26; // total stats ≈ 0.26 x score² for a roughly balanced build (FF Scouter, BSP).
   // Score-ratio uncertainty factors (their side and own side each): narrow when in the linear regime with age known.
-  const RATIO_UNCERTAINTY_NARROW = 1.35;
-  const RATIO_UNCERTAINTY_WIDE = 1.75;
+  const RATIO_UNCERTAINTY_NARROW = 1.5;
+  const RATIO_UNCERTAINTY_WIDE = 2.5; // Exponential regime: a factor of ~6 on stats is honest for a public-stats guess.
   const CALIBRATION_MIN_PAIRS = 3;
-  const CALIBRATION_SCALE_MIN = 1 / 3;
+  const CALIBRATION_SCALE_MIN = 0.2;
   const CALIBRATION_SCALE_MAX = 3;
   const VERDICT_EASY_MAX_RATIO = 0.30;  // Fair Fight below ~1.8: safe but little respect.
   const VERDICT_GOOD_MAX_RATIO = 0.60;  // Fair Fight ~1.8 to ~2.6: the sweet spot.
@@ -675,7 +680,7 @@
       : null;
     return {
       script: SCRIPT,
-      version: '0.18.1',
+      version: '0.18.2',
       generatedAt: new Date().toISOString(),
       active: isActiveView(),
       factionId: Number.isFinite(Number(activeFactionId)) ? Number(activeFactionId) : null,
@@ -744,7 +749,7 @@
 
   function showDiagnosticSnapshot() {
     const payload = JSON.stringify(getDiagnosticSnapshot(), null, 2);
-    window.prompt(`${SCRIPT} v0.18.1 diagnostics - copy this text if troubleshooting is needed:`, payload);
+    window.prompt(`${SCRIPT} v0.18.2 diagnostics - copy this text if troubleshooting is needed:`, payload);
     return payload;
   }
 
@@ -1599,7 +1604,7 @@
     if (!Number.isFinite(value)) return null;
     const base = value >= ENERGY_AT_CAP
       ? STATS_AT_CAP + LINEAR_STATS_PER_ENERGY * (value - ENERGY_AT_CAP)
-      : Math.max(MIN_TOTAL_STATS, STATS_AT_CAP * Math.exp(EXPONENTIAL_RATE_PER_ENERGY * (value - ENERGY_AT_CAP)));
+      : Math.max(MIN_TOTAL_STATS, STARTING_TOTAL_STATS * Math.exp(EXPONENTIAL_RATE_PER_ENERGY * Math.max(0, value)));
     const se = Math.min(STAT_ENHANCER_MAX, Math.max(0, Number(statEnhancers) || 0));
     return base * Math.pow(STAT_ENHANCER_MULTIPLIER, se);
   }
@@ -2113,7 +2118,11 @@
     }
     if (label === 'RISK' || label === 'CHANGED') {
       verdict = 'AVOID';
-      verdictReasons.push(label === 'CHANGED' ? 'you have lost your two latest fights against them after winning before' : 'you lost your latest fight against them');
+      if (label === 'CHANGED') verdictReasons.push('you have lost your two latest fights against them after winning before');
+      else if (decisive.length > 0 && decisive[0].k === 'loss') verdictReasons.push('you lost your latest fight against them');
+      else if (decisive.length > 0) verdictReasons.push('you have lost to them too often');
+      else if (ratioSource === 'proxy') verdictReasons.push('estimated at 75% or more of your strength');
+      else verdictReasons.push('Fair Fight was capped when you fought them');
     } else if (label === 'PROVEN' && verdict !== null && verdict !== 'EASY') {
       verdict = shiftVerdict(verdict, -1);
       verdictReasons.push(`you have beaten them ${wins} times without a loss`);
@@ -4738,20 +4747,23 @@
       const energyNoAge = gymEnergy({ xan: 100, ref: 0, drink: 0, activitySec: 200 * 7200 }, null);
       if (!energyNoAge || energyNoAge.ageKnown || Math.abs(energyNoAge.total - (25000 + 200 * 480)) > 1e-6) faults.push('gym energy without age');
       // Stat mapping: continuous at the cap, monotonic, floored, linear above.
-      if (Math.abs(statsFromEnergy(ENERGY_AT_CAP) - STATS_AT_CAP) > 1e-6) faults.push('stat mapping at cap');
+      if (Math.abs(statsFromEnergy(ENERGY_AT_CAP) - STATS_AT_CAP) > 1e-3) faults.push('stat mapping at cap');
       if (!(statsFromEnergy(ENERGY_AT_CAP - 1) < STATS_AT_CAP && statsFromEnergy(ENERGY_AT_CAP + 1) > STATS_AT_CAP)) faults.push('stat mapping monotonic');
       if (statsFromEnergy(0) !== MIN_TOTAL_STATS) faults.push('stat mapping floor');
-      if (Math.abs(statsFromEnergy(ENERGY_AT_CAP + 400_000) - (STATS_AT_CAP + 1e9)) > 1e-3) faults.push('stat mapping linear regime');
+      if (Math.abs(statsFromEnergy(ENERGY_AT_CAP + 400_000) - (STATS_AT_CAP + 1e9)) > 1e-2) faults.push('stat mapping linear regime');
+      // Live anchor: 317k gym energy (662 xanax, 124 refills, 262 active days) must land inside Torn PDA's 2M-25M band.
+      const anchorStats = statsFromEnergy(317_057);
+      if (!(anchorStats > 2e6 && anchorStats < 25e6)) faults.push('stat mapping live anchor');
       if (Math.abs(statsFromEnergy(ENERGY_AT_CAP, 100) - STATS_AT_CAP * Math.pow(1.01, 100)) > 1e-3) faults.push('stat enhancer multiplier');
       if (Math.abs(scoreFromStats(0.26 * 10_000 * 10_000) - 10_000) > 1e-6) faults.push('score from stats');
       // Match estimate: real own stats, uncertainty, calibration.
       const ownProxy = { xan: 3000, ref: 800, drink: 100, boost: 0, elo: 2000, won: 5000, lost: 500, draw: 0, revives: 0, activitySec: 4000 * 3600, donatorDays: 0 };
       const ownScore = scoreFromStats(statsFromEnergy(gymEnergy(ownProxy, 1500).total));
       const weak = estimateMatchFromProxy({ xan: 300, ref: 50, drink: 10, elo: 1500, won: 500, lost: 100, draw: 0, revives: 0, activitySec: 300 * 3600, donatorDays: 0 }, ownProxy, { theirAgeDays: 200, ownAgeDays: 1500, ownBss: ownScore });
-      if (!weak || !(weak.ratio > 0.1 && weak.ratio < 0.45) || weak.capped || !weak.ownExact || weak.ratioLow >= weak.ratio || weak.ratioHigh <= weak.ratio) faults.push('proxy weak estimate');
+      if (!weak || !(weak.ratio > 0.005 && weak.ratio < 0.45) || weak.capped || !weak.ownExact || weak.ratioLow >= weak.ratio || weak.ratioHigh <= weak.ratio) faults.push('proxy weak estimate');
       // The v0.15 bug: an old, active account with few xanax is not EASY once natural energy is counted.
-      const oldActive = estimateMatchFromProxy({ xan: 200, ref: 50, drink: 0, elo: 1500, won: 2000, lost: 200, draw: 0, revives: 0, activitySec: 6000 * 3600, donatorDays: 0 }, ownProxy, { theirAgeDays: 1500, ownAgeDays: 1500, ownBss: ownScore });
-      if (!oldActive || oldActive.ratio < VERDICT_GOOD_MAX_RATIO) faults.push('natural energy counted');
+      const oldActive = estimateMatchFromProxy({ xan: 200, ref: 50, drink: 0, elo: 1500, won: 2000, lost: 200, draw: 0, revives: 0, activitySec: 1500 * 2 * 3600, donatorDays: 0 }, ownProxy, { theirAgeDays: 1500, ownAgeDays: 1500, ownBss: ownScore });
+      if (!oldActive || oldActive.ratio < VERDICT_EASY_MAX_RATIO) faults.push('natural energy counted');
       const equal = estimateMatchFromProxy({ ...ownProxy }, ownProxy, { theirAgeDays: 1500, ownAgeDays: 1500 });
       if (!equal || Math.abs(equal.ratio - 1) > 1e-9 || !equal.capped || equal.ff !== 3 || equal.ownExact) faults.push('proxy equal estimate');
       const calibrated = estimateMatchFromProxy({ ...ownProxy }, ownProxy, { theirAgeDays: 1500, ownAgeDays: 1500, calibration: { applied: true, scale: 0.5, pairs: 5 } });
