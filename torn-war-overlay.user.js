@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.18.0
+// @version      0.18.1
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -34,15 +34,15 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0180__';
+  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0181__';
   if (window[INSTANCE_KEY]) {
-    console.warn(`[${SCRIPT}] v0.18.0 is already running; duplicate injection ignored.`);
+    console.warn(`[${SCRIPT}] v0.18.1 is already running; duplicate injection ignored.`);
     return;
   }
   window[INSTANCE_KEY] = true;
 
   const API_BASE = 'https://api.torn.com/v2';
-  const API_COMMENT = 'two-v0.18.0';
+  const API_COMMENT = 'two-v0.18.1';
   const PDA_API_KEY = '###PDA-APIKEY###';
 
   const KEY_STORAGE = 'two.apiKey.v1';
@@ -675,7 +675,7 @@
       : null;
     return {
       script: SCRIPT,
-      version: '0.18.0',
+      version: '0.18.1',
       generatedAt: new Date().toISOString(),
       active: isActiveView(),
       factionId: Number.isFinite(Number(activeFactionId)) ? Number(activeFactionId) : null,
@@ -744,7 +744,7 @@
 
   function showDiagnosticSnapshot() {
     const payload = JSON.stringify(getDiagnosticSnapshot(), null, 2);
-    window.prompt(`${SCRIPT} v0.18.0 diagnostics - copy this text if troubleshooting is needed:`, payload);
+    window.prompt(`${SCRIPT} v0.18.1 diagnostics - copy this text if troubleshooting is needed:`, payload);
     return payload;
   }
 
@@ -1947,6 +1947,10 @@
     };
   }
 
+  function isInformativeFairFight(attack) {
+    return attack?.outcome?.kind === 'win' && Number.isFinite(Number(attack.ff)) && Number(attack.ff) > 1 + 1e-9;
+  }
+
   function recordAttackIntel(attack) {
     if (!attack || processedAttackIds.has(attack.id)) {
       incStat('intelAttacksSkipped');
@@ -1970,7 +1974,9 @@
     record.u = nowMs;
     if (attack.defenderLevel) record.lvl = attack.defenderLevel;
 
-    if (attack.ff !== null && attack.ended > 0) {
+    // Torn reports Fair Fight 1.00 on lost, stalemated, escaped and interrupted attacks because no respect was earned.
+    // Only a winning hit carries a real Fair Fight, so only wins teach the opponent's strength.
+    if (attack.ff !== null && attack.ended > 0 && isInformativeFairFight(attack)) {
       if (!record.ffAt || attack.ended >= Number(record.ffAt)) {
         record.ff = attack.ff;
         record.ffAt = attack.ended;
@@ -2031,12 +2037,15 @@
     let ff = null;
     let ffSource = 'none';
     let ffCapped = false;
-    if (record?.bss && ownBss) {
-      ff = fairFightFromScores(record.bss, ownBss);
+    // Records written before v0.18.1 may hold a Fair Fight of 1.00 from a lost fight; treat those as unknown.
+    const storedBss = Number(record?.bss);
+    const storedFf = Number(record?.ff);
+    if (Number.isFinite(storedBss) && storedBss > 0 && ownBss) {
+      ff = fairFightFromScores(storedBss, ownBss);
       ffSource = 'model';
       ffCapped = Boolean(record.bssCap);
-    } else if (Number.isFinite(Number(record?.ff)) && record.ffAt && nowMs - Number(record.ffAt) * 1000 <= INTEL_FF_MAX_AGE_MS) {
-      ff = Number(record.ff);
+    } else if (Number.isFinite(storedFf) && storedFf > 1 + 1e-9 && record.ffAt && nowMs - Number(record.ffAt) * 1000 <= INTEL_FF_MAX_AGE_MS) {
+      ff = storedFf;
       ffSource = 'observed';
       ffCapped = ff >= FAIR_FIGHT_CAP - 1e-9;
     }
@@ -4697,6 +4706,12 @@
       const sample = (offsetSec, kind, extra = {}) => ({ t: nowSec - offsetSec, k: kind, s: 6, f: 2.71, c: null, w: 2, rw: 1, ...extra });
       const unknown = deriveOpponentIntel(null, { level: 60 });
       if (unknown.label !== 'UNKNOWN' || unknown.ev !== null || unknown.ffLabel !== '') faults.push('intel unknown state');
+      // A lost fight reports Fair Fight 1.00 and must not teach strength; a stored 1.00 from older versions is ignored.
+      const lostAttack = normalizeAttack({ id: 10, started: 100, ended: 160, defender: { id: 7, level: 60 }, result: 'Lost', respect_gain: 0, chain: 0, is_ranked_war: true, modifiers: { fair_fight: 1, war: 1 } });
+      const wonAttack = normalizeAttack({ id: 11, started: 200, ended: 260, defender: { id: 7, level: 60 }, result: 'Hospitalized', respect_gain: 6, chain: 0, is_ranked_war: true, modifiers: { fair_fight: 2.4, war: 2 } });
+      if (isInformativeFairFight(lostAttack) || !isInformativeFairFight(wonAttack)) faults.push('informative fair fight');
+      const staleLossRecord = deriveOpponentIntel({ w: 5, l: 3, n: 0, r: [sample(10, 'loss', { f: 1 })], ff: 1, ffAt: nowSec - 10, bss: 0, bssAt: nowSec - 10, bssCap: false }, { level: 37, ownBss: 40 });
+      if (staleLossRecord.ff !== null || staleLossRecord.ratio !== null || staleLossRecord.ffSource !== 'none') faults.push('lost fight fair fight ignored');
       const proven = deriveOpponentIntel({ w: 3, l: 0, n: 0, r: [sample(10, 'win'), sample(20, 'win'), sample(30, 'win')], ff: 2.71, ffAt: nowSec - 10 }, { level: 60, chainSnapshot: { nextHit: 1 } });
       if (proven.label !== 'PROVEN' || proven.ff !== 2.71 || proven.scoreSource !== 'model') faults.push('intel proven state');
       if (Math.abs(proven.expectedScore - 1.3 * 2 * 2.71) > 1e-9) faults.push('intel expected score');

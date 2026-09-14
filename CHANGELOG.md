@@ -4,6 +4,10 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.18.1 - Fair Fight from wins only
+
+- Fixed a live-war bug: Torn reports a Fair Fight of 1.00 on lost, stalemated, escaped and interrupted attacks because no respect was earned. The script treated that as a real observation, overwrote the genuine value from an earlier win, and concluded the opponent had zero strength (`score ratio 0.00`, EV collapsed). Only winning hits now teach an opponent's strength, and stored 1.00 values from earlier versions are ignored until the next win.
+
 ## 0.18.0 - Filters and early-exit labels
 
 - Added a `FILT` button that opens a row of filter chips above the member list: match verdict (`EASY GOOD RISKY AVOID ?`), status (`OKAY HOSP AWAY`), activity (`ON IDLE OFF`) and a minimum `EV` (`ANY 2+ 4+ 6+`). Tap a chip to hide those rows; a lit chip is shown, a struck-through chip is hidden; `RESET` shows everything. Filters persist and apply in both `ALL` and `TARGETS` modes. A fact the script does not know never hides a row.
