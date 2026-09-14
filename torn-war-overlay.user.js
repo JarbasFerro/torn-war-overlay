@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.18.2
+// @version      0.18.3
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -34,15 +34,15 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0182__';
+  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0183__';
   if (window[INSTANCE_KEY]) {
-    console.warn(`[${SCRIPT}] v0.18.2 is already running; duplicate injection ignored.`);
+    console.warn(`[${SCRIPT}] v0.18.3 is already running; duplicate injection ignored.`);
     return;
   }
   window[INSTANCE_KEY] = true;
 
   const API_BASE = 'https://api.torn.com/v2';
-  const API_COMMENT = 'two-v0.18.2';
+  const API_COMMENT = 'two-v0.18.3';
   const PDA_API_KEY = '###PDA-APIKEY###';
 
   const KEY_STORAGE = 'two.apiKey.v1';
@@ -680,7 +680,7 @@
       : null;
     return {
       script: SCRIPT,
-      version: '0.18.2',
+      version: '0.18.3',
       generatedAt: new Date().toISOString(),
       active: isActiveView(),
       factionId: Number.isFinite(Number(activeFactionId)) ? Number(activeFactionId) : null,
@@ -749,7 +749,7 @@
 
   function showDiagnosticSnapshot() {
     const payload = JSON.stringify(getDiagnosticSnapshot(), null, 2);
-    window.prompt(`${SCRIPT} v0.18.2 diagnostics - copy this text if troubleshooting is needed:`, payload);
+    window.prompt(`${SCRIPT} v0.18.3 diagnostics - copy this text if troubleshooting is needed:`, payload);
     return payload;
   }
 
@@ -2179,7 +2179,8 @@
       ownProxy,
       ffLabel: ff === null ? '' : ffCapped ? 'FF3.0+' : `FF${ff.toFixed(2)}`,
       evLabel: ev === null ? '' : `EV${ev.toFixed(1)}`,
-      verdictLabel: verdict === null ? '' : `${verdictEstimated ? '~' : ''}${verdict}`,
+      // A withheld estimate is still information: show '~?' rather than a blank badge.
+      verdictLabel: verdict === null ? (ratioSource === 'proxy' ? '~?' : '') : `${verdictEstimated ? '~' : ''}${verdict}`,
     };
   }
 
@@ -4785,6 +4786,7 @@
       if (fightBeatsProxy.ratioSource !== 'observed' || fightBeatsProxy.verdict !== 'RISKY' || fightBeatsProxy.verdictEstimated) faults.push('observed fight overrides proxy');
       const noInfo = deriveOpponentIntel(null, { level: 40 });
       if (noInfo.verdict !== null || noInfo.verdictLabel !== '') faults.push('verdict unknown');
+      if (uncertain.verdictLabel !== '~?') faults.push('withheld estimate label');
       const strongProxyLikely = deriveOpponentIntel({ w: 1, l: 0, n: 0, r: [sample(10, 'win', { f: null })] }, { level: 40, proxy: { ratio: 1.2, ratioLow: 0.9, ratioHigh: 1.6, ff: 3, capped: true, ageKnown: true, eloGap: 0, eloDisagrees: false } });
       if (strongProxyLikely.verdict !== 'AVOID') faults.push('capped proxy stays avoid');
       const cappedObservedWin = deriveOpponentIntel({ w: 1, l: 0, n: 0, r: [sample(10, 'win', { f: 3 })], ff: 3, ffAt: nowSec - 10 }, { level: 40 });

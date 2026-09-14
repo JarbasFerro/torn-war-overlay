@@ -4,6 +4,10 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.18.3 - Withheld estimates are labelled
+
+- When the estimate is too uncertain to call, the badge now shows `~?` next to the EV instead of leaving the verdict blank.
+
 ## 0.18.2 - Growth curve retuned on live evidence
 
 - The strength estimate assumed an optimal trainer at a top gym, which put a 262-active-day account with 662 xanax at 680 million stats. Torn PDA's own estimate on the same screen said 2 to 25 million and the user's fights agreed. The growth rate is now about a quarter of the optimal figure, stats start near 50k and reach the 200M cap after roughly 550k gym energy; a live anchor is checked by the self-tests.
