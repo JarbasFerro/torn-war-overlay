@@ -4,6 +4,11 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.22.1 - Losses show up
+
+- The attack page now recognises Torn's defeat line, "X lost to Y", so a lost fight shows `LOSS` and triggers NEXT like a win does.
+- The war-scoped result dots and the "This war" line in the row sheet include losses and stalemates. Torn only flags scoring hits as ranked-war attacks, so those were being dropped; any attack on a member of the enemy faction since the war started now counts.
+
 ## 0.22.0 - Leave or Hospitalize hint
 
 - The attack panel now shows `LEAVE` or `HOSP` before the fight, and the row sheet says "If you win: Leave/Hospitalize" with the reason. The rule follows published war guidance: leave offline farm targets so they rotate back in 15 to 30 minutes for another hit; hospitalize anyone online or active in the last 15 minutes, and strong opponents, so they burn medical cooldown and stop scoring against your faction. The tooltip also reminds you never to mug in a ranked war. The hint disappears once the fight is over.

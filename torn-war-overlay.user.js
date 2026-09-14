@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.22.0
+// @version      0.22.1
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -34,15 +34,15 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0220__';
+  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0221__';
   if (window[INSTANCE_KEY]) {
-    console.warn(`[${SCRIPT}] v0.22.0 is already running; duplicate injection ignored.`);
+    console.warn(`[${SCRIPT}] v0.22.1 is already running; duplicate injection ignored.`);
     return;
   }
   window[INSTANCE_KEY] = true;
 
   const API_BASE = 'https://api.torn.com/v2';
-  const API_COMMENT = 'two-v0.22.0';
+  const API_COMMENT = 'two-v0.22.1';
   const PDA_API_KEY = '###PDA-APIKEY###';
 
   const KEY_STORAGE = 'two.apiKey.v1';
@@ -706,7 +706,7 @@
       : null;
     return {
       script: SCRIPT,
-      version: '0.22.0',
+      version: '0.22.1',
       generatedAt: new Date().toISOString(),
       active: isActiveView(),
       factionId: Number.isFinite(Number(activeFactionId)) ? Number(activeFactionId) : null,
@@ -775,7 +775,7 @@
 
   function showDiagnosticSnapshot() {
     const payload = JSON.stringify(getDiagnosticSnapshot(), null, 2);
-    window.prompt(`${SCRIPT} v0.22.0 diagnostics - copy this text if troubleshooting is needed:`, payload);
+    window.prompt(`${SCRIPT} v0.22.1 diagnostics - copy this text if troubleshooting is needed:`, payload);
     return payload;
   }
 
@@ -4072,8 +4072,10 @@
       if (intelEnabled()) recordAttackIntel(attack);
 
       if (!visibleIds.has(attack.defenderId)) continue;
-      if (scope?.mode === 'war' && !attack.isRankedWar) continue;
       if (scope && attack.ended < Number(scope.from || 0)) continue;
+      // A lost or stalemated fight earns no score, so Torn does not flag it as a ranked-war hit; keep it when the defender
+      // belongs to the enemy faction (or the flag is set) so the dots show losses too.
+      if (scope?.mode === 'war' && !attack.isRankedWar && attack.defenderFactionId !== null && attack.defenderFactionId !== Number(scope.factionId)) continue;
       const current = attackHistoryByUser.get(attack.defenderId) || [];
       if (current.some(entry => Number(entry?.id) === attack.id)) continue;
       current.push({
@@ -5097,6 +5099,7 @@
       if (classifyFightLine('GatecrashR hospitalized Jarbas', '')?.kind !== 'unknown') faults.push('fight line unknown target');
       if (classifyFightLine('You left GatecrashR on the street (+4.10)', '')?.kind !== 'win' || classifyFightLine('GatecrashR hospitalized you', '')?.kind !== 'loss') faults.push('fight line you forms');
       if (classifyFightLine('You were hospitalized by GatecrashR', 'GatecrashR')?.kind !== 'loss') faults.push('fight line passive loss');
+      if (classifyFightLine('Jarbas lost to Criminals', 'Criminals')?.kind !== 'loss' || classifyFightLine('Criminals lost to Jarbas', 'Criminals')?.kind !== 'win') faults.push('fight line lost to');
       const staleLine = classifyFightLine('The fight ended in a stalemate', 'X');
       if (!staleLine || staleLine.kind !== 'stalemate') faults.push('fight line stalemate');
       const uncertain = deriveOpponentIntel(null, { level: 40, proxy: { ratio: 0.5, ratioLow: 0.16, ratioHigh: 1.5, ff: 2.33, capped: false, ageKnown: false, eloGap: 0, eloDisagrees: false } });
@@ -5207,6 +5210,13 @@
     const line = String(text || '').replace(/\s+/g, ' ').trim();
     if (!line) return null;
     const target = targetName ? String(targetName).toLowerCase() : '';
+    // Torn writes a defeat as "<attacker> lost to <defender>" (seen live, 14 Sep 2026).
+    const lost = line.match(/^(\S+) lost to (\S+)/i);
+    if (lost) {
+      const loser = lost[1].toLowerCase();
+      const kind = loser === 'you' ? 'loss' : target && loser === target ? 'win' : 'loss';
+      return { kind, method: 'defeat', respect: null, line };
+    }
     for (const { re, method } of FIGHT_FINISHERS) {
       const match = line.match(re);
       if (!match) continue;
