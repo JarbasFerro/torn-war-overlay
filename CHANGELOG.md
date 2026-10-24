@@ -4,6 +4,14 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.24.1 - Hunt dock fixes from the first live session
+
+- Energy is now read with the Limited attack-history key when one is set. A Public Torn PDA key cannot read bars, so the dock showed `⚡ –` even though battle stats (read with the Limited key) worked. With energy known, the hunt goal follows your hits again.
+- The dock and its minimised pill now sit above Torn's floating chat buttons, or any other bar fixed to the bottom of the screen, instead of underneath them. The script finds what is on the bottom edge by hit-testing, so it does not depend on Torn's class names.
+- During a fight the dock tucks into the `HUNT n` pill so it never covers the weapon slots; the result brings it back with the bright `NEXT`. Tap the pill to open it mid-fight.
+- Tiny strength shares read "under 1%" instead of "0% to 0%".
+- The details sheet says the goal is the minimum when your energy is unknown, instead of "twice your hits".
+
 ## 0.24.0 - Hunt dock
 
 - In hunt mode the attack page swaps the top panel for a panel docked at the bottom of the screen, under your thumb and clear of Torn's HP bars. The war panel is unchanged.

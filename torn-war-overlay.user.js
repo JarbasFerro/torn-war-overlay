@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.24.0
+// @version      0.24.1
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling, plus a hunt mode that scans for easy wins.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -34,15 +34,15 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0240__';
+  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0241__';
   if (window[INSTANCE_KEY]) {
-    console.warn(`[${SCRIPT}] v0.24.0 is already running; duplicate injection ignored.`);
+    console.warn(`[${SCRIPT}] v0.24.1 is already running; duplicate injection ignored.`);
     return;
   }
   window[INSTANCE_KEY] = true;
 
   const API_BASE = 'https://api.torn.com/v2';
-  const API_COMMENT = 'two-v0.24.0';
+  const API_COMMENT = 'two-v0.24.1';
   const PDA_API_KEY = '###PDA-APIKEY###';
 
   const KEY_STORAGE = 'two.apiKey.v1';
@@ -2562,13 +2562,20 @@
     return Number.isFinite(number) ? number.toLocaleString('en-US') : '?';
   }
 
+  // Tiny shares must not round to a flat "0%": a level 1 against you is "under 1%".
+  function formatStatsPercent(fraction) {
+    const value = Number(fraction) * 100;
+    if (!Number.isFinite(value)) return '?';
+    return value < 0.5 ? 'under 1%' : `${Math.round(value)}%`;
+  }
+
   function describeVerdict(intel) {
     if (intel.verdict === null) {
       return intel.ownProxy
         ? 'Verdict: ? (no estimate yet; their public stats are still loading, or unavailable)'
         : 'Verdict: ? (no estimate yet; your own public stats are needed for comparison)';
     }
-    const strengthPct = intel.ratio !== null ? Math.round(intel.ratio * intel.ratio * 100) : null;
+    const strengthPct = intel.ratio !== null ? formatStatsPercent(intel.ratio * intel.ratio) : null;
     const meaning = {
       EASY: 'you should win comfortably, but the respect per hit is low',
       GOOD: 'the sweet spot: good respect per hit and you should still win',
@@ -2577,10 +2584,10 @@
     }[intel.verdict];
     const parts = [`Verdict: ${intel.verdictLabel}${intel.verdictEstimated ? ' (estimated from public stats)' : ''}: ${meaning}`];
     if (strengthPct !== null) {
-      const range = intel.verdictEstimated && intel.proxy
-        ? `, plausibly ${Math.round(intel.proxy.ratioLow * intel.proxy.ratioLow * 100)}% to ${Math.round(intel.proxy.ratioHigh * intel.proxy.ratioHigh * 100)}%`
-        : '';
-      parts.push(`They look about ${strengthPct}% of your raw battle stats${range} (score ratio ${intel.ratio.toFixed(2)})`);
+      const low = intel.proxy ? formatStatsPercent(intel.proxy.ratioLow * intel.proxy.ratioLow) : '';
+      const high = intel.proxy ? formatStatsPercent(intel.proxy.ratioHigh * intel.proxy.ratioHigh) : '';
+      const range = intel.verdictEstimated && intel.proxy ? (low === high ? `, plausibly ${low}` : `, plausibly ${low} to ${high}`) : '';
+      parts.push(`They look about ${strengthPct} of your raw battle stats${range} (score ratio ${intel.ratio.toFixed(2)})`);
     }
     for (const reason of intel.verdictReasons) parts.push(reason.charAt(0).toUpperCase() + reason.slice(1));
     if (intel.verdictEstimated && intel.theirProxy && intel.ownProxy && intel.proxy) {
@@ -5264,6 +5271,7 @@
   let attackStatusInFlight = null;
   let attackStatusLastAt = 0;
   let attackPanelHidden = false;
+  let attackFightActive = false; // A log line arrived but no result yet: the hunt dock tucks away from the weapons.
   let attackFightResult = null; // { kind: 'win'|'loss'|'stalemate', respect, line, at }
   let attackNextTarget = null; // { userId, name, level, intel, target } | null, or { none: true }
   let attackNextLoading = false;
@@ -5330,7 +5338,10 @@
       if (monotonicNowMs() - attackLogAttachedAt < 1_500) continue;
       attackLogSeenLines.add(text);
       const result = classifyFightLine(text, attackTargetProfile?.name);
-      if (!result || result.kind === 'unknown') continue;
+      if (!result || result.kind === 'unknown') {
+        if (!attackFightActive) { attackFightActive = true; renderAttackPanel(); } // The fight has started.
+        continue;
+      }
       onAttackFightFinished(result);
       return;
     }
@@ -5847,6 +5858,46 @@
   // that matters, NEXT, is large and turns bright once the fight is over. The war panel is unchanged.
   let huntDock = null;
   let huntDetailOpen = false;
+  let huntOpenedDuringFight = false;
+  let huntBottomOffset = 0;
+  let huntBottomMeasuredAt = 0;
+
+  function fixedAncestor(node) {
+    for (let el = node, depth = 0; el && el !== document.body && el !== document.documentElement && depth < 10; el = el.parentElement, depth += 1) {
+      const position = getComputedStyle(el).position;
+      if (position === 'fixed' || position === 'sticky') return el;
+    }
+    return null;
+  }
+
+  // Torn's floating chat buttons (and any other fixed bar) sit on the bottom edge; find their top so the dock sits
+  // above them. Hit-testing finds whatever is actually there without depending on Torn's class names.
+  function measureBottomObstruction() {
+    if (typeof document.elementsFromPoint !== 'function' || typeof getComputedStyle !== 'function') return 0;
+    const width = window.innerWidth || 0;
+    const height = window.innerHeight || 0;
+    if (!width || !height) return 0;
+    let top = height;
+    for (const fraction of [0.25, 0.5, 0.7, 0.85, 0.97]) {
+      const x = Math.round(width * fraction);
+      for (let dy = 3; dy <= 160; dy += 6) {
+        const hit = document.elementsFromPoint(x, height - dy).find(el => !huntDock?.contains(el) && el !== document.body && el !== document.documentElement);
+        if (!hit || !fixedAncestor(hit)) break;
+        top = Math.min(top, hit.getBoundingClientRect().top);
+      }
+    }
+    return Math.min(160, Math.max(0, Math.ceil(height - top)));
+  }
+
+  function updateHuntDockOffset(dock) {
+    if (Date.now() - huntBottomMeasuredAt < 2_000) return;
+    huntBottomMeasuredAt = Date.now();
+    const offset = measureBottomObstruction();
+    if (offset === huntBottomOffset && dock.dataset.twoOffset) return;
+    huntBottomOffset = offset;
+    dock.dataset.twoOffset = String(offset);
+    dock.style.bottom = `calc(env(safe-area-inset-bottom, 0px) + ${offset + 6}px)`;
+  }
 
   function huntTodayKey() {
     return new Date(serverNowMs()).toISOString().slice(0, 10); // Torn City Time is UTC.
@@ -5937,7 +5988,12 @@
     const energy = document.createElement('span');
     energy.className = 'two-hd-energy';
     const info = makeDockButton('two-hd-icon', 'i', 'Show hunt details', () => { huntDetailOpen = !huntDetailOpen; renderAttackPanel(); });
-    const minimize = makeDockButton('two-hd-icon', '–', 'Minimise; hunting continues', () => { huntState.minimized = true; saveHuntState(); renderAttackPanel(); });
+    const minimize = makeDockButton('two-hd-icon', '–', 'Minimise; hunting continues', () => {
+      if (attackFightActive && !attackFightResult) { huntOpenedDuringFight = false; renderAttackPanel(); return; }
+      huntState.minimized = true;
+      saveHuntState();
+      renderAttackPanel();
+    });
     top.append(name, verdict, status, energy, info, minimize);
 
     const hint = document.createElement('div');
@@ -5979,7 +6035,12 @@
 
     full.append(top, hint, result, actions, detail);
 
-    const pill = makeDockButton('two-hd-pill', '', 'Show the hunt panel', () => { huntState.minimized = false; saveHuntState(); renderAttackPanel(); });
+    const pill = makeDockButton('two-hd-pill', '', 'Show the hunt panel', () => {
+      if (attackFightActive && !attackFightResult) huntOpenedDuringFight = true;
+      huntState.minimized = false;
+      saveHuntState();
+      renderAttackPanel();
+    });
 
     dock.append(full, pill);
     Object.assign(dock, {
@@ -5999,7 +6060,10 @@
     const userId = attackTargetId;
     const nowSec = serverNowSec();
     const ready = huntConfirmedCount(nowSec);
-    const minimized = Boolean(huntState.minimized);
+    updateHuntDockOffset(dock);
+    // While fighting, the dock tucks into the pill so the weapon slots stay free; the result brings it back.
+    const tucked = attackFightActive && !attackFightResult && !huntOpenedDuringFight;
+    const minimized = Boolean(huntState.minimized) || tucked;
     dock.__full.hidden = minimized;
     dock.__pill.hidden = !minimized;
     setClass(dock, `two-hunt-dock${minimized ? ' two-hunt-dock-min' : ''}`);
@@ -6080,7 +6144,7 @@
     const goal = huntAvailableGoal();
     const session = huntSession();
     const lines = [
-      `Hunt: ${ready} targets confirmed free in the last ${HUNT_FRESH_SEC / 60} min (goal ${goal}: twice your hits, at least ${HUNT_MIN_AVAILABLE}). ${formatCount(poolSize)} saved.`,
+      `Hunt: ${ready} targets confirmed free in the last ${HUNT_FRESH_SEC / 60} min (goal ${goal}: ${ownBars ? `twice your ${Math.floor(ownBars.energyCurrent / ENERGY_PER_ATTACK)} hits, between ${HUNT_MIN_AVAILABLE} and ${HUNT_MAX_AVAILABLE}` : `the minimum, because your energy is unknown`}). ${formatCount(poolSize)} saved.`,
       `Scanner: ${huntLastNote || 'idle'} · ${huntRatePerMinute()} requests/min · next ID #${huntState.cursor ? formatCount(huntState.cursor) : '?'} · ${formatCount(huntState.scanned)} IDs checked.`,
       `Today: ${session.w} win${session.w === 1 ? '' : 's'}, ${session.l} loss${session.l === 1 ? '' : 'es'}.`,
       ownBars ? `Energy ${ownBars.energyCurrent}/${ownBars.energyMax}.` : `Energy unavailable${ownBarsError ? `: ${ownBarsError}` : ' (not read yet)'}.`,
@@ -6183,7 +6247,8 @@
     if (Date.now() < globalBackoffUntil) return ownBars;
     ownBarsLastAt = Date.now();
     try {
-      const data = await apiGet('/user/bars', { cacheBust: true });
+      // The battle-stats key (Limited) can read bars when the main key cannot, e.g. a Public Torn PDA key.
+      const data = await apiGet('/user/bars', { cacheBust: true, keyOverride: attackApiKey || null });
       const energy = data?.bars?.energy;
       if (energy) {
         ownBars = {
@@ -6199,7 +6264,9 @@
     } catch (err) {
       if (Number(err?.code) === 16 || Number(err?.code) === 7) {
         ownBarsUnsupported = true;
-        ownBarsError = 'this API key cannot read your bars (it needs Minimal or Limited access)';
+        ownBarsError = attackApiKey
+          ? 'neither of your API keys can read your bars (it needs Minimal or Limited access)'
+          : 'your API key cannot read your bars; set a Limited key with the "set attack-history key" menu command';
       } else if (err?.message !== 'API backoff active.') {
         ownBarsError = err?.message || 'request failed';
         console.warn(`[${SCRIPT}] Could not read own energy`, err);

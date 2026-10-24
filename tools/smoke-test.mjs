@@ -143,8 +143,13 @@ const huntProfiles = {
   1003: { id: 1003, name: 'Tank', level: 20, rank: 'Invincible', status: { state: 'Okay' }, last_action: { timestamp: nowSec } },
 };
 const huntUrls = [];
-const huntFetch = url => {
+const huntFetch = (url, options) => {
   huntUrls.push(String(url));
+  // Only the Limited key can read bars, like a Public Torn PDA key next to a Limited attack-history key.
+  if (String(url).includes('/user/bars')) {
+    const limited = String(options?.headers?.Authorization || '').includes('LIMITEDKEYLIMITE');
+    return Promise.resolve({ status: 200, text: () => Promise.resolve(JSON.stringify(limited ? { bars: { energy: { current: 100, maximum: 150, full_time: 0 } } } : { error: { code: 16, error: 'Access level of this key is not high enough' } })) });
+  }
   if (String(url).includes('/faction/50/members')) {
     const members = [{ id: 2001, name: 'Ghost', level: 3, status: { state: 'Okay' }, last_action: { timestamp: nowSec - 86400 } }];
     return Promise.resolve({ status: 200, text: () => Promise.resolve(JSON.stringify({ members })) });
@@ -159,6 +164,7 @@ const hunt = await boot({
   search: '?sid=attack&user2ID=123456',
   seed: {
     'two.apiKey.v1': 'ABCDEFGHIJKLMNOP',
+    'two.attackApiKey.v1': 'LIMITEDKEYLIMITE',
     'two.selfIntel.v1': JSON.stringify({ bss: 20000 }),
     'two.hunt.v1': JSON.stringify({ enabled: true, cursor: 1005, pool: { 2001: { n: 'Ghost', l: 3, w: 'r', r: 0.01, s: 'o', t: 0, c: 0, f: 50 } } }),
   },
@@ -180,7 +186,7 @@ if (!dock?.__link || dock.__link.hidden || !String(dock.__link.href || '').inclu
   failed = true; console.error('Hunt mode: dock NEXT button for the refreshed target missing', dock?.__linkMain?.textContent, dock?.__link?.href);
 }
 if (!/^\d+$/.test(dock?.__pumpCount?.textContent || '')) { failed = true; console.error('Hunt mode: ready count missing on the hunt button'); }
-if (!/^⚡/.test(dock?.__energy?.textContent || '') || !/Energy unavailable/.test(dock?.__energy?.title || '')) { failed = true; console.error('Hunt mode: energy chip should explain a missing energy read', dock?.__energy?.title); }
+if (dock?.__energy?.textContent !== '⚡4') { failed = true; console.error('Hunt mode: energy should be read with the Limited key (100 energy = 4 hits)', dock?.__energy?.textContent, dock?.__energy?.title); }
 
 const other = await boot({ pathname: '/index.php', search: '' });
 if (other.promptCalls !== 0 || other.errors.length > 0) { failed = true; console.error('Unrelated page: script should not run'); }
