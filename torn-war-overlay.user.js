@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.24.1
+// @version      0.24.2
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling, plus a hunt mode that scans for easy wins.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -34,15 +34,15 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0241__';
+  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0242__';
   if (window[INSTANCE_KEY]) {
-    console.warn(`[${SCRIPT}] v0.24.1 is already running; duplicate injection ignored.`);
+    console.warn(`[${SCRIPT}] v0.24.2 is already running; duplicate injection ignored.`);
     return;
   }
   window[INSTANCE_KEY] = true;
 
   const API_BASE = 'https://api.torn.com/v2';
-  const API_COMMENT = 'two-v0.24.1';
+  const API_COMMENT = 'two-v0.24.2';
   const PDA_API_KEY = '###PDA-APIKEY###';
 
   const KEY_STORAGE = 'two.apiKey.v1';
@@ -4739,7 +4739,7 @@
       .two-sheet-body div:first-child { color:#fff; font-weight:700; }
       .two-sheet-actions { margin-top:10px; display:flex; justify-content:flex-start; gap:10px; align-items:center; }
       .two-sheet-link { color:#bfc8d0; font:700 11px/1.2 Arial,sans-serif; text-decoration:underline; padding:3px 4px; }
-      .two-hunt-dock { position:fixed; left:50%; bottom:calc(env(safe-area-inset-bottom, 0px) + 8px); transform:translateX(-50%); width:min(calc(100vw - 12px), 520px); z-index:99999; box-sizing:border-box; padding:8px; border-radius:12px; border:1px solid rgba(255,255,255,.16); background:#151515; color:#ddd; font:700 12px/1.25 Arial,sans-serif; box-shadow:0 -4px 16px rgba(0,0,0,.55); }
+      .two-hunt-dock { position:fixed; left:50%; bottom:calc(env(safe-area-inset-bottom, 0px) + 8px); transform:translateX(-50%); width:min(calc(100vw - 12px), 520px); z-index:99999; transition:bottom .18s ease-out; box-sizing:border-box; padding:8px; border-radius:12px; border:1px solid rgba(255,255,255,.16); background:#151515; color:#ddd; font:700 12px/1.25 Arial,sans-serif; box-shadow:0 -4px 16px rgba(0,0,0,.55); }
       .two-hunt-dock[hidden], .two-hunt-dock [hidden] { display:none !important; }
       .two-hunt-dock.two-hunt-dock-min { left:auto; right:8px; transform:none; width:auto; padding:0; border-radius:22px; background:transparent; border:0; box-shadow:none; }
       .two-hd-top { display:flex; align-items:center; gap:7px; }
@@ -5861,11 +5861,20 @@
   let huntOpenedDuringFight = false;
   let huntBottomOffset = 0;
   let huntBottomMeasuredAt = 0;
+  let huntBottomLastReading = -1;
+  const HUNT_BAR_MAX_HEIGHT = 140;
 
-  function fixedAncestor(node) {
-    for (let el = node, depth = 0; el && el !== document.body && el !== document.documentElement && depth < 10; el = el.parentElement, depth += 1) {
+  // The top of the bottom-edge bar that contains `hit`, or null. Torn's chat sits inside a large invisible fixed
+  // layer, so a tall fixed wrapper is not the bar: then only the small element actually hit (a chat button) counts.
+  function bottomBarTop(hit, height) {
+    for (let el = hit, depth = 0; el && el !== document.body && el !== document.documentElement && depth < 14; el = el.parentElement, depth += 1) {
       const position = getComputedStyle(el).position;
-      if (position === 'fixed' || position === 'sticky') return el;
+      if (position !== 'fixed' && position !== 'sticky') continue;
+      const box = el.getBoundingClientRect();
+      if (box.bottom >= height - 12 && box.height > 0 && box.height <= HUNT_BAR_MAX_HEIGHT) return box.top;
+      const own = hit.getBoundingClientRect();
+      if (own.height > 0 && own.height <= 90 && own.bottom >= height - 60) return own.top;
+      return null;
     }
     return null;
   }
@@ -5878,25 +5887,31 @@
     const height = window.innerHeight || 0;
     if (!width || !height) return 0;
     let top = height;
-    for (const fraction of [0.25, 0.5, 0.7, 0.85, 0.97]) {
+    for (const fraction of [0.1, 0.3, 0.5, 0.6, 0.7, 0.8, 0.9, 0.97]) {
       const x = Math.round(width * fraction);
-      for (let dy = 3; dy <= 160; dy += 6) {
+      for (const dy of [2, 8, 16, 28]) {
         const hit = document.elementsFromPoint(x, height - dy).find(el => !huntDock?.contains(el) && el !== document.body && el !== document.documentElement);
-        if (!hit || !fixedAncestor(hit)) break;
-        top = Math.min(top, hit.getBoundingClientRect().top);
+        const barTop = hit ? bottomBarTop(hit, height) : null;
+        if (barTop !== null) top = Math.min(top, barTop);
       }
     }
-    return Math.min(160, Math.max(0, Math.ceil(height - top)));
+    return Math.min(HUNT_BAR_MAX_HEIGHT, Math.max(0, Math.ceil(height - top)));
   }
 
+  // Move only on two matching readings in a row, so a stray hit (scrolling, a menu opening) never makes the dock jump;
+  // the first appearance of a bar applies at once so the dock does not sit on the chat buttons while it loads.
   function updateHuntDockOffset(dock) {
-    if (Date.now() - huntBottomMeasuredAt < 2_000) return;
+    if (Date.now() - huntBottomMeasuredAt < 1_500) return;
     huntBottomMeasuredAt = Date.now();
-    const offset = measureBottomObstruction();
-    if (offset === huntBottomOffset && dock.dataset.twoOffset) return;
-    huntBottomOffset = offset;
-    dock.dataset.twoOffset = String(offset);
-    dock.style.bottom = `calc(env(safe-area-inset-bottom, 0px) + ${offset + 6}px)`;
+    const measured = measureBottomObstruction();
+    const firstBar = huntBottomOffset === 0 && measured > 0;
+    const confirmed = measured === huntBottomLastReading;
+    huntBottomLastReading = measured;
+    if (!firstBar && !confirmed) return;
+    if (measured === huntBottomOffset && dock.dataset.twoOffset) return;
+    huntBottomOffset = measured;
+    dock.dataset.twoOffset = String(measured);
+    dock.style.bottom = `calc(env(safe-area-inset-bottom, 0px) + ${measured + 6}px)`;
   }
 
   function huntTodayKey() {

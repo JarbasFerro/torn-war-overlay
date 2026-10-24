@@ -173,7 +173,7 @@ Do **not** post API keys in an issue.
 
 ## Development status
 
-Current release candidate: **v0.24.1**.
+Current release candidate: **v0.24.2**.
 
 v0.24.0 adds the bottom-docked hunt panel. v0.23.0 adds hunt mode for the Halloween event. v0.22.0 adds the Leave or Hospitalize hint. v0.21.0 adds the tap-to-explain sheet on the faction list. v0.20.0 captures each fight's result on the attack page and offers the next best target. v0.19.0 bounds every estimate by Torn's rank band and models win probability from the combat formulas. v0.18 added list filters, `OUT EARLY` labels and several live-war fixes. v0.17.0 carries the verdict, expected value, hospital countdown and chain state onto the attack page. v0.16.0 replaced the v0.15 strength estimate with a model built on Torn's gym formula, natural energy and self-calibration from real fights. The green/yellow targeting path is unchanged since v0.13.1 apart from the null-timer fix and API-sourced levels; old members now show their exact age instead of `>=1.5y`.
 

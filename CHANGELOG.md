@@ -4,6 +4,11 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.24.2 - Hunt dock stays put
+
+- The dock no longer jumps around the bottom of the screen. Torn's chat buttons live inside a large invisible fixed layer, and v0.24.1 measured that layer instead of the buttons, so the dock floated about 130 px too high after the chat loaded. Only a short bar on the bottom edge, or the small button actually under the test point, now counts.
+- The dock moves only when two readings in a row agree, so scrolling or a menu opening cannot make it jump. The first time the chat bar appears it moves at once, so it does not sit on the chat buttons while they load, and the move is animated.
+
 ## 0.24.1 - Hunt dock fixes from the first live session
 
 - Energy is now read with the Limited attack-history key when one is set. A Public Torn PDA key cannot read bars, so the dock showed `⚡ –` even though battle stats (read with the Limited key) worked. With energy known, the hunt goal follows your hits again.
