@@ -4,6 +4,14 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.23.2 - Hunt mode keeps its list current
+
+- Hunt mode now stops once enough targets are confirmed free: twice the hits your current energy allows, at least 20 and at most 100. "Confirmed free" means okay and in Torn at a check in the last 10 minutes. The row shows this as `free/goal`, for example `14/20 free`.
+- Below the goal it re-checks the weakest saved targets before scanning new IDs, because re-checking a known weak player costs one request while finding a new one costs several.
+- Targets in a faction are refreshed through the faction roster: one request updates the status, travel and last action of every saved member of that faction. Targets without a faction cost one profile request each. A target who has left their faction is re-read from their profile.
+- Hospital and jail timers cost nothing until they run out; travelling or unknown targets are re-checked every 20 minutes.
+- `NEXT` order: confirmed free first, then okay-but-stale and expired timers, then travelling or unknown, weakest first within each. The link tooltip shows when the target was last active.
+
 ## 0.23.1 - Hunt mode keeps going, weakest first
 
 - The scan no longer pauses once 25 targets are ready; it keeps going while the attack page is visible, still at about 40 requests a minute.

@@ -88,13 +88,14 @@ Personal intel requires a Limited key, or a Custom key granting `user -> attacks
 
 ## Hunt mode (Halloween)
 
-Hunt mode is built for Torn's Halloween event, where the number of easy wins matters more than the respect per hit. To start, open any attack page and tap `HUNT` on the panel (it shows `HUNT ON` while active). The userscript menu also has "hunt mode on/off", "restart hunt scan from my ID" and "clear hunt pool". The script scans user IDs one by one downward, starting at your own ID minus 1, and saves its position so it resumes on the next attack page. The hunt row shows how many targets are ready and kept, the next ID to scan (for example `#1,002`), requests per minute and a `Name [level] ▸` link to the next ready target. After a fight, `NEXT` comes from the hunt pool instead of the enemy faction roster. You open every attack yourself; the script never attacks or clicks for you.
+Hunt mode is built for Torn's Halloween event, where the number of easy wins matters more than the respect per hit. To start, open any attack page and tap `HUNT` on the panel (it shows `HUNT ON` while active). The userscript menu also has "hunt mode on/off", "restart hunt scan from my ID" and "clear hunt pool". The script scans user IDs one by one downward, starting at your own ID minus 1, and saves its position so it resumes on the next attack page. The hunt row shows how many targets are confirmed free against the goal (for example `14/20 free`), how many are kept, the next ID to scan (for example `#1,002`), requests per minute and a `Name [level] ▸` link to the next free target. After a fight, `NEXT` comes from the hunt pool instead of the enemy faction roster. You open every attack yourself; the script never attacks or clicks for you.
 
 Each ID costs one `/user/{id}/profile` request. Torn's public rank puts a hard ceiling on a player's stats, so a weak rank proves an easy win with no further request, and a rank that only allows strong players rules them out. Only undecided players cost a second request (public personal stats). They are kept only if the estimate is `EASY` (under 30% of your strength) and even the high end of the estimate is under 60%, which is about a 93% win chance at worst. Rank-based accepts use the same 60% worst case.
 
 - Skipped: nonexistent IDs, yourself, your faction mates, players in federal jail and fallen accounts.
 - Pool: up to 5,000 kept targets; when full, the strongest is dropped. `NEXT` offers the weakest player who is out of hospital and not travelling, and only after a fresh status check says they can be hit. Targets in hospital or jail return when their timer ends; travelling ones are re-checked after 20 minutes and come last. A target you lose to is removed.
-- Pacing: about 40 requests a minute (Torn's limit is 100), continuously while the attack page is visible, and it honors the existing API backoff.
+- Keeping the list current: hospital and jail timers cost nothing until they run out. Everyone else is re-checked weakest first, and for players in a faction one roster request refreshes every saved member of that faction (status, travel and last action). Re-checks come before scanning new IDs.
+- Pacing: about 40 requests a minute (Torn's limit is 100), only while the attack page is visible, and only until enough targets are confirmed free in the last 10 minutes: twice the hits your energy allows, at least 20 and at most 100. It honors the existing API backoff.
 - Requirements: personal intel turned on (the default), because hunt mode needs your own strength. A Limited key gives your exact battle stats; otherwise your public-stats estimate is used. It works with a Public key.
 - Storage: the pool and scan position are stored locally under `two.hunt.v1`.
 
@@ -172,7 +173,7 @@ Do **not** post API keys in an issue.
 
 ## Development status
 
-Current release candidate: **v0.23.1**.
+Current release candidate: **v0.23.2**.
 
 v0.23.0 adds hunt mode for the Halloween event. v0.22.0 adds the Leave or Hospitalize hint. v0.21.0 adds the tap-to-explain sheet on the faction list. v0.20.0 captures each fight's result on the attack page and offers the next best target. v0.19.0 bounds every estimate by Torn's rank band and models win probability from the combat formulas. v0.18 added list filters, `OUT EARLY` labels and several live-war fixes. v0.17.0 carries the verdict, expected value, hospital countdown and chain state onto the attack page. v0.16.0 replaced the v0.15 strength estimate with a model built on Torn's gym formula, natural energy and self-calibration from real fights. The green/yellow targeting path is unchanged since v0.13.1 apart from the null-timer fix and API-sourced levels; old members now show their exact age instead of `>=1.5y`.
 

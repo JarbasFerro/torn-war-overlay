@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.23.1
+// @version      0.23.2
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling, plus a hunt mode that scans for easy wins.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -34,15 +34,15 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0231__';
+  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0232__';
   if (window[INSTANCE_KEY]) {
-    console.warn(`[${SCRIPT}] v0.23.1 is already running; duplicate injection ignored.`);
+    console.warn(`[${SCRIPT}] v0.23.2 is already running; duplicate injection ignored.`);
     return;
   }
   window[INSTANCE_KEY] = true;
 
   const API_BASE = 'https://api.torn.com/v2';
-  const API_COMMENT = 'two-v0.23.1';
+  const API_COMMENT = 'two-v0.23.2';
   const PDA_API_KEY = '###PDA-APIKEY###';
 
   const KEY_STORAGE = 'two.apiKey.v1';
@@ -5149,17 +5149,26 @@
       if (huntReadyAt({ state: 'Hospital', until: huntNow + 300 }, huntNow) !== huntNow + 300) faults.push('hunt hospital ready time');
       if (huntReadyAt({ state: 'Traveling' }, huntNow) !== huntNow + HUNT_RECHECK_AWAY_SEC) faults.push('hunt away recheck');
       if (huntBandLimits('Beginner', 5, 1_000_000_000) !== null) faults.push('hunt pre-rework rank');
+      const localNow = 1_000_000;
       const huntPool = {
-        1: { r: 0.30, s: 'o', t: huntNow - 10 },
-        2: { r: 0.05, s: 'a', t: huntNow - 10 },
-        3: { r: 0.10, s: 'o', t: huntNow - 10 },
-        4: { r: 0.01, s: 'h', t: huntNow + 600 },
-        5: { r: 0.20, s: 'h', t: huntNow - 5 },
+        1: { r: 0.30, s: 'o', t: huntNow - 10, c: localNow - 60 },   // confirmed
+        2: { r: 0.05, s: 'a', t: huntNow - 10, c: localNow - 3600 }, // travelling, re-check due
+        3: { r: 0.10, s: 'o', t: huntNow - 10, c: localNow - 30 },   // confirmed, weaker
+        4: { r: 0.01, s: 'h', t: huntNow + 600, c: localNow },       // still in hospital
+        5: { r: 0.20, s: 'h', t: huntNow - 5, c: localNow - 900 },   // timer ran out
+        6: { r: 0.02, s: 'o', t: huntNow - 10, c: localNow - 3600 }, // okay but stale
       };
-      if (huntPriorityOrder(huntPool, huntNow).join() !== '3,5,1,2') faults.push('hunt priority order');
-      if (huntPriorityOrder(huntPool, huntNow, 3).join() !== '5,1,2') faults.push('hunt priority excludes current target');
+      if (huntPriorityOrder(huntPool, huntNow, null, localNow).join() !== '3,1,6,5,2') faults.push('hunt priority order');
+      if (huntPriorityOrder(huntPool, huntNow, 3, localNow).join() !== '1,6,5,2') faults.push('hunt priority excludes current target');
+      if (huntTier(huntPool[4], huntNow, localNow) !== null || huntTier(huntPool[6], huntNow, localNow) !== 1) faults.push('hunt tiers');
+      const rosterPool = { 11: { r: 0.1, s: 'a', t: 0, c: 0, f: 50 }, 12: { r: 0.1, s: 'o', t: 0, c: 0, f: 50 }, 13: { r: 0.1, s: 'o', t: 0, c: 0, f: 0 } };
+      const rosterMissing = huntApplyMembers(rosterPool, 50, [
+        { id: 11, name: 'Back', level: 3, status: { state: 'Okay' }, last_action: { timestamp: huntNow - 99 } },
+        { id: 99, status: { state: 'Okay' } },
+      ], huntNow);
+      if (rosterMissing.join() !== '12' || rosterPool[11].s !== 'o' || rosterPool[11].a !== huntNow - 99 || rosterPool[11].n !== 'Back' || rosterPool[13].c !== 0) faults.push('hunt faction roster refresh');
       pruneHuntPool(huntPool, 3);
-      if (Object.keys(huntPool).sort().join() !== '2,3,4') faults.push('hunt pool drops strongest');
+      if (Object.keys(huntPool).sort().join() !== '2,4,6') faults.push('hunt pool drops strongest');
       if (normalizeHuntPool({ 7: { n: 'Old', why: 'rank', r: 0.1, ready: huntNow } })['7']?.w !== 'r') faults.push('hunt pool migration');
       if (!huntAcceptsEstimate({ ratio: 0.2, ratioHigh: 0.5 }) || huntAcceptsEstimate({ ratio: 0.2, ratioHigh: 0.7 }) || huntAcceptsEstimate({ ratio: 0.35, ratioHigh: 0.5 })) faults.push('hunt estimate acceptance');
       const debugText = JSON.stringify(getDiagnosticSnapshot());
@@ -5332,6 +5341,12 @@
   // the stat band (crime and networth triggers can only lower it), so a weak rank proves an easy win without a second
   // call, and the lowest band the rank allows rules out strong players. Only the undecided middle costs a public-stats
   // request. Paced well under Torn's 100 requests a minute and only while the attack page is in front. It never attacks.
+  //
+  // Keeping the pool current (v0.23.2): a hospital or jail timer is exact barring a revive, so those entries cost
+  // nothing until it runs out. Everyone else is re-checked weakest first, and one faction roster request refreshes
+  // every pool member of that faction at once (status, travel and last action). Re-checking a known weak player is
+  // cheaper than finding a new one, so refreshes come before scanning, and both stop once enough targets are confirmed
+  // free: twice the hits your energy allows, at least 20.
   // ---------------------------------------------------------------------------
 
   const HUNT_STORAGE = 'two.hunt.v1';
@@ -5343,6 +5358,9 @@
   const HUNT_REVALIDATE_MS = 90_000; // A status older than this is re-read before a target is offered.
   const HUNT_MAX_REVALIDATIONS = 4;
   const HUNT_SKIP_STATES = Object.freeze(['federal', 'fallen']);
+  const HUNT_FRESH_SEC = 10 * 60; // An okay status checked this recently counts as confirmed free.
+  const HUNT_MIN_AVAILABLE = 20;
+  const HUNT_MAX_AVAILABLE = 100;
 
   let huntState = loadHuntState();
   let huntWorkerRunning = false;
@@ -5365,7 +5383,8 @@
   }
 
   // Entry: n name, l level, w 'r' (rank ceiling) | 'e' (estimate), r strength ratio (rank: worst case), s 'o' okay |
-  // 'h' hospital or jail | 'a' away or unknown, t ready time (server s), c last status check (local s).
+  // 'h' hospital or jail | 'a' away or unknown, t ready time (server s), c last status check (local s),
+  // f faction id (0 none), a last action (server s), d status description (e.g. "Traveling to Mexico").
   function normalizeHuntPool(pool) {
     const out = {};
     if (!pool || typeof pool !== 'object') return out;
@@ -5447,13 +5466,32 @@
   }
 
   // Store a fresh status on a pool entry. False when the player should leave the pool.
-  function huntApplyStatus(entry, status, nowSec) {
+  function huntApplyStatus(entry, status, nowSec, { lastAction = null, factionId } = {}) {
     const readyAt = huntReadyAt(status, nowSec);
     if (readyAt === null) return false;
     entry.s = huntStatusKind(status);
     entry.t = Math.ceil(readyAt);
     entry.c = Math.floor(Date.now() / 1000);
+    entry.d = entry.s === 'o' ? '' : String(status?.description || '').slice(0, 40);
+    if (Number(lastAction) > 0) entry.a = Math.floor(Number(lastAction));
+    if (factionId !== undefined) entry.f = Number(factionId) > 0 ? Number(factionId) : 0;
     return true;
+  }
+
+  // Apply one faction roster to every pool member of that faction. Returns the pool ids that are no longer in it.
+  function huntApplyMembers(pool, factionId, members, nowSec) {
+    const byId = new Map();
+    for (const member of Array.isArray(members) ? members : []) byId.set(String(member?.id), member);
+    const missing = [];
+    for (const [id, entry] of Object.entries(pool)) {
+      if (Number(entry.f) !== Number(factionId)) continue;
+      const member = byId.get(id);
+      if (!member) { missing.push(Number(id)); continue; }
+      if (!huntApplyStatus(entry, member.status, nowSec, { lastAction: member.last_action?.timestamp, factionId })) { delete pool[id]; continue; }
+      if (typeof member.name === 'string') entry.n = member.name;
+      if (Number(member.level)) entry.l = Number(member.level);
+    }
+    return missing;
   }
 
   // Decide from the profile alone: accept (ceiling proves an easy win), skip, or deep (needs public stats).
@@ -5483,22 +5521,85 @@
 
   const HUNT_CLOCK_SLACK_SEC = 5; // The server clock anchor can move back a little between a scan and a pick.
 
-  // Free to hit now, best first: known okay (or a hospital/jail timer that has run out) before travelling or unknown,
-  // then weakest first.
-  function huntPriorityOrder(pool, nowSec, excludeId = null) {
-    return Object.entries(pool)
-      .filter(([id, entry]) => Number(id) !== excludeId && Number(entry.t) <= nowSec + HUNT_CLOCK_SLACK_SEC)
-      .sort((a, b) => ((a[1].s === 'a') - (b[1].s === 'a')) || (Number(a[1].r) - Number(b[1].r)))
-      .map(([id]) => Number(id));
+  // 0 confirmed free (okay, checked recently), 1 probably free (okay but stale, or a timer that ran out),
+  // 2 due a re-check (travelling or unknown), null not free yet.
+  function huntTier(entry, nowSec, localSec = Date.now() / 1000) {
+    if (Number(entry.t) > nowSec + HUNT_CLOCK_SLACK_SEC) return null;
+    if (entry.s === 'o') return localSec - (Number(entry.c) || 0) <= HUNT_FRESH_SEC ? 0 : 1;
+    return entry.s === 'h' ? 1 : 2;
+  }
+
+  // Free to hit now, best first: confirmed, then probably free, then due a re-check; weakest first within each.
+  function huntPriorityOrder(pool, nowSec, excludeId = null, localSec = Date.now() / 1000) {
+    const rows = [];
+    for (const [id, entry] of Object.entries(pool)) {
+      if (Number(id) === excludeId) continue;
+      const tier = huntTier(entry, nowSec, localSec);
+      if (tier !== null) rows.push([Number(id), tier, Number(entry.r) || 0]);
+    }
+    rows.sort((a, b) => (a[1] - b[1]) || (a[2] - b[2]));
+    return rows.map(row => row[0]);
   }
 
   // The panel redraws every second; counting must not sort a pool of thousands.
-  function huntReadyCount(nowSec = serverNowSec()) {
+  function huntConfirmedCount(nowSec = serverNowSec()) {
+    const localSec = Date.now() / 1000;
     let count = 0;
     for (const [id, entry] of Object.entries(huntState.pool)) {
-      if (Number(id) !== attackTargetId && Number(entry.t) <= nowSec + HUNT_CLOCK_SLACK_SEC) count += 1;
+      if (Number(id) !== attackTargetId && huntTier(entry, nowSec, localSec) === 0) count += 1;
     }
     return count;
+  }
+
+  // Enough confirmed targets for the energy on hand, with slack for the ones other hunters hit first.
+  function huntAvailableGoal() {
+    const hits = ownBars ? Math.floor((Number(ownBars.energyCurrent) || 0) / ENERGY_PER_ATTACK) : 0;
+    return Math.min(HUNT_MAX_AVAILABLE, Math.max(HUNT_MIN_AVAILABLE, hits * 2));
+  }
+
+  // Refresh one entry: its faction roster when it has one (refreshing every pool member there), else its profile.
+  // Returns the number of requests spent.
+  async function huntRefreshEntry(id) {
+    const entry = huntState.pool[String(id)];
+    if (!entry) return 0;
+    const factionId = Number(entry.f) || 0;
+    let requests = 0;
+    if (factionId) {
+      requests += 1;
+      const data = await huntApiGet(`/faction/${factionId}/members`, { cacheBust: true });
+      const missing = huntApplyMembers(huntState.pool, factionId, data?.members, serverNowSec());
+      for (const gone of missing) { const left = huntState.pool[String(gone)]; if (left) { left.f = 0; left.c = 0; } }
+      if (!missing.includes(Number(id))) return requests;
+    }
+    requests += 1;
+    let profile;
+    try {
+      profile = (await huntApiGet(`/user/${id}/profile`, { cacheBust: true }))?.profile;
+    } catch (err) {
+      if (Number(err?.code) === 6) { delete huntState.pool[String(id)]; return requests; }
+      throw err;
+    }
+    const current = huntState.pool[String(id)];
+    if (!current) return requests;
+    if (!profile || !huntApplyStatus(current, profile.status, serverNowSec(), { lastAction: profile.last_action?.timestamp, factionId: profile.faction_id })) {
+      delete huntState.pool[String(id)];
+      return requests;
+    }
+    if (ownFactionId && Number(profile.faction_id) === Number(ownFactionId)) { delete huntState.pool[String(id)]; return requests; }
+    if (typeof profile.name === 'string') current.n = profile.name;
+    if (Number(profile.level)) current.l = Number(profile.level);
+    return requests;
+  }
+
+  // What the worker should do next: refresh the weakest unconfirmed entry, scan a new ID, or nothing.
+  function huntNextJob(nowSec = serverNowSec()) {
+    if (huntConfirmedCount(nowSec) >= huntAvailableGoal()) return { kind: 'idle' };
+    const localSec = Date.now() / 1000;
+    for (const id of huntPriorityOrder(huntState.pool, nowSec, attackTargetId, localSec)) {
+      const tier = huntTier(huntState.pool[String(id)], nowSec, localSec);
+      if (tier > 0) return { kind: 'refresh', id };
+    }
+    return { kind: 'scan' };
   }
 
   function huntReadyIds(nowSec = serverNowSec()) {
@@ -5581,7 +5682,7 @@
       w: accepted.why === 'rank' ? 'r' : 'e',
       r: Math.round(accepted.ratio * 10_000) / 10_000,
     };
-    huntApplyStatus(entry, profile.status, nowSec);
+    huntApplyStatus(entry, profile.status, nowSec, { lastAction: profile.last_action?.timestamp, factionId: profile.faction_id });
     huntState.pool[String(id)] = entry;
     huntState.found += 1;
     pruneHuntPool();
@@ -5598,22 +5699,30 @@
         if (Date.now() < globalBackoffUntil) { huntLastNote = 'API backoff'; renderAttackPanel(); await sleep(Math.min(2_000, globalBackoffUntil - Date.now())); continue; }
         const ownScore = huntOwnScore();
         if (!ownScore) { huntLastNote = 'reading your stats'; renderAttackPanel(); await sleep(1_000); continue; }
-        const cursor = await ensureHuntCursor();
-        if (cursor < 1) { huntLastNote = 'reached ID 1'; renderAttackPanel(); break; }
         const wait = nextAllowedAt - Date.now();
         if (wait > 0) { await sleep(wait); continue; }
+        const job = huntNextJob();
+        if (job.kind === 'idle') { huntLastNote = 'enough targets'; renderAttackPanel(); await sleep(5_000); continue; }
+        if (job.kind === 'scan') {
+          const cursor = await ensureHuntCursor();
+          if (cursor < 1) { huntLastNote = 'reached ID 1'; renderAttackPanel(); await sleep(5_000); continue; }
+        }
         const started = Date.now();
-        huntLastNote = 'scanning';
+        huntLastNote = job.kind === 'scan' ? 'scanning' : 'refreshing';
         try {
-          const requests = await huntScanOne(ownScore);
+          const requests = job.kind === 'scan' ? await huntScanOne(ownScore) : await huntRefreshEntry(job.id);
           nextAllowedAt = started + HUNT_REQUEST_GAP_MS * Math.max(1, requests || 1);
           registerApiSuccess();
+          if (!huntNext && job.kind === 'refresh') huntPickNext();
         } catch (err) {
           nextAllowedAt = started + HUNT_REQUEST_GAP_MS;
           if (err?.message !== 'API backoff active.') {
             registerApiFailure(err);
-            console.warn(`[${SCRIPT}] Hunt scan failed`, err);
+            console.warn(`[${SCRIPT}] Hunt ${job.kind} failed`, err);
           }
+          // A refresh that keeps failing must not block the queue: push the entry back a few minutes.
+          const entry = job.kind === 'refresh' ? huntState.pool[String(job.id)] : null;
+          if (entry && !err?.retryable) entry.t = Math.ceil(serverNowSec()) + 5 * 60;
         }
         saveHuntState();
         renderAttackPanel();
@@ -5628,7 +5737,7 @@
     }
   }
 
-  // Offer the oldest-ready pool entry, re-reading its status first when the stored one is stale.
+  // Offer the best free pool entry, re-reading its status first when the stored one is older than 90 seconds.
   async function huntPickNext() {
     if (huntPicking || !huntState.enabled || !apiKey || apiPermanentlyDisabled) return;
     huntPicking = true;
@@ -5641,19 +5750,12 @@
         if (Date.now() - (Number(entry.c) || 0) * 1000 > HUNT_REVALIDATE_MS) {
           if (revalidations >= HUNT_MAX_REVALIDATIONS || Date.now() < globalBackoffUntil) break;
           revalidations += 1;
-          let profile;
-          try {
-            profile = (await huntApiGet(`/user/${id}/basic`, { cacheBust: true }))?.profile;
-          } catch (err) {
-            if (Number(err?.code) === 6) { delete huntState.pool[String(id)]; continue; }
-            throw err;
-          }
-          if (!huntApplyStatus(entry, profile?.status, serverNowSec())) { delete huntState.pool[String(id)]; continue; }
-          if (typeof profile?.name === 'string') entry.n = profile.name;
-          if (Number(profile?.level)) entry.l = Number(profile.level);
-          if (entry.s !== 'o') continue; // Only offer a target whose fresh status says they can be hit.
+          await huntRefreshEntry(id);
+          const fresh = huntState.pool[String(id)];
+          if (!fresh || fresh.s !== 'o' || Number(fresh.t) > serverNowSec() + HUNT_CLOCK_SLACK_SEC) continue; // Only offer a target whose fresh status says they can be hit.
         }
-        huntNext = { userId: id, name: entry.n || `#${id}`, level: entry.l };
+        const offered = huntState.pool[String(id)];
+        huntNext = { userId: id, name: offered.n || `#${id}`, level: offered.l };
         break;
       }
     } catch (err) {
@@ -5688,11 +5790,12 @@
   function renderAttackHunt(row) {
     if (!row) return;
     const nowSec = serverNowSec();
-    const ready = huntState.enabled ? huntReadyCount(nowSec) : 0;
+    const ready = huntState.enabled ? huntConfirmedCount(nowSec) : 0;
+    const goal = huntAvailableGoal();
     const poolSize = Object.keys(huntState.pool).length;
     const rate = huntRatePerMinute();
     const note = !intelEnabled() ? 'turn intel on in SET' : huntLastNote;
-    const signature = `${huntState.enabled}|${ready}|${poolSize}|${huntState.cursor}|${rate}|${note}|${huntPicking}|${huntNext?.userId || ''}`;
+    const signature = `${huntState.enabled}|${ready}/${goal}|${poolSize}|${huntState.cursor}|${rate}|${note}|${huntPicking}|${huntNext?.userId || ''}`;
     if (row.dataset.twoSignature === signature) return;
     row.dataset.twoSignature = signature;
     row.replaceChildren();
@@ -5715,8 +5818,8 @@
     const info = document.createElement('span');
     info.className = 'two-hunt-info';
     const cursorText = huntState.cursor ? `#${formatCount(huntState.cursor)}` : '';
-    info.textContent = [`${ready} ready`, `${formatCount(poolSize)} kept`, cursorText, rate ? `${rate}/min` : '', note && note !== 'scanning' ? note : ''].filter(Boolean).join(' · ');
-    info.title = `Pool: ${formatCount(poolSize)} easy targets kept (up to ${formatCount(HUNT_POOL_MAX)}; the strongest are dropped first), ${ready} free to hit now. Scanned ${formatCount(huntState.scanned)} IDs. Next ID to check: ${huntState.cursor ?? 'your ID - 1'}. NEXT offers the weakest player who is out of hospital and not travelling; status is re-checked before it is offered.`;
+    info.textContent = [`${ready}/${goal} free`, `${formatCount(poolSize)} kept`, cursorText, rate ? `${rate}/min` : '', note && note !== 'scanning' ? note : ''].filter(Boolean).join(' · ');
+    info.title = `${ready} targets confirmed free in the last ${HUNT_FRESH_SEC / 60} min; the goal is ${goal} (twice the hits your energy allows, at least ${HUNT_MIN_AVAILABLE}). Below the goal it re-checks the weakest saved targets first (one faction roster request covers all saved members of that faction; hospital timers cost nothing until they run out), and scans new IDs only when nothing is left to re-check. Pool: ${formatCount(poolSize)} kept (up to ${formatCount(HUNT_POOL_MAX)}; the strongest are dropped first). Scanned ${formatCount(huntState.scanned)} IDs. Next ID: ${huntState.cursor ?? 'your ID - 1'}.`;
     row.appendChild(info);
 
     if (huntPicking) {
@@ -5734,9 +5837,11 @@
     link.textContent = `${huntNext.name}${level} ▸`;
     const entry = huntState.pool[String(huntNext.userId)];
     const pct = Math.max(1, Math.round((Number(entry?.r) || 0) * 100));
-    link.title = entry?.w === 'r'
-      ? `Easy: their rank caps them at ${pct}% of your strength or less. Status checked just now.`
-      : `Easy: public stats put them near ${pct}% of your strength. Status checked just now.`;
+    const idleSec = Number(entry?.a) > 0 ? Math.max(0, Math.floor(nowSec - Number(entry.a))) : null;
+    const presence = idleSec === null ? '' : idleSec < 5 * 60 ? ' Active in the last 5 minutes.' : ` Last active ${formatDurationCompact(idleSec)} ago.`;
+    link.title = (entry?.w === 'r'
+      ? `Easy: their rank caps them at ${pct}% of your strength or less.`
+      : `Easy: public stats put them near ${pct}% of your strength.`) + ` Okay and in Torn at the last check.${presence}`;
     row.appendChild(link);
   }
 
