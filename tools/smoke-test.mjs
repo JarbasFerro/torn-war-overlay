@@ -4,7 +4,9 @@
 //   1. faction page mode: verifies the built-in self-tests report no faults and the API key prompt is reached once;
 //   2. attack page mode without a key: never prompts, emits no errors;
 //   3. attack page mode with a key and a stubbed API: the panel mounts and shows the target's hospital countdown;
-//   4. an unrelated page: the script does not run.
+//   4. attack page mode with hunt mode on: the scanner keeps a weak player, skips a strong one and a missing ID,
+//      and offers the weak one as the next target;
+//   5. an unrelated page: the script does not run.
 // Run: node tools/smoke-test.mjs
 
 import { readFileSync } from 'node:fs';
@@ -43,7 +45,7 @@ function makeElement(tag = 'div') {
   return element;
 }
 
-async function boot({ pathname, search, seed = {}, fetchImpl = null }) {
+async function boot({ pathname, search, seed = {}, fetchImpl = null, waitMs = 150 }) {
   const errors = [];
   const warnings = [];
   const storage = new Map(Object.entries(seed));
@@ -98,8 +100,8 @@ async function boot({ pathname, search, seed = {}, fetchImpl = null }) {
 
   vm.createContext(sandbox);
   vm.runInContext(source, sandbox, { filename: 'torn-war-overlay.user.js' });
-  await new Promise(resolve => setTimeout(resolve, 150));
-  return { errors, warnings, promptCalls, mounted: body.children.length, panel: body.children[0] || null };
+  await new Promise(resolve => setTimeout(resolve, waitMs));
+  return { errors, warnings, promptCalls, storage, mounted: body.children.length, panel: body.children[0] || null };
 }
 
 let failed = false;
@@ -135,9 +137,39 @@ if (!/^HOSP 1:5\d$|^HOSP 2:00$/.test(statusText)) { failed = true; console.error
 if (!String(panel?.__twoStatus?.className || '').includes('two-attack-status-hospital')) { failed = true; console.error('Attack mode: hospital status class missing'); }
 if (!/Dummy \[42\]/.test(panel?.__twoName?.textContent || '')) { failed = true; console.error(`Attack mode: expected target name and level, saw "${panel?.__twoName?.textContent}"`); }
 
+// Hunt mode: IDs 1005 (weak, Okay), 1004 (missing) and 1003 (strong) are scanned at the paced gap, newest first.
+const huntProfiles = {
+  1005: { id: 1005, name: 'Pumpkin', level: 5, rank: 'Beginner', status: { state: 'Okay' }, last_action: { timestamp: nowSec } },
+  1003: { id: 1003, name: 'Tank', level: 20, rank: 'Invincible', status: { state: 'Okay' }, last_action: { timestamp: nowSec } },
+};
+const huntFetch = url => {
+  const match = String(url).match(/\/user\/(\d+)\/(profile|basic)/);
+  const profile = match ? huntProfiles[match[1]] : null;
+  if (profile) return Promise.resolve({ status: 200, text: () => Promise.resolve(JSON.stringify({ profile })) });
+  return stubFetch(url);
+};
+const hunt = await boot({
+  pathname: '/loader.php',
+  search: '?sid=attack&user2ID=123456',
+  seed: {
+    'two.apiKey.v1': 'ABCDEFGHIJKLMNOP',
+    'two.selfIntel.v1': JSON.stringify({ bss: 20000 }),
+    'two.hunt.v1': JSON.stringify({ enabled: true, cursor: 1005, pool: {} }),
+  },
+  fetchImpl: huntFetch,
+  waitMs: 6_500, // Three scans 1.5 s apart, and the 2 s save throttle must land after the third.
+});
+if (hunt.errors.length > 0) { failed = true; console.error('HUNT MODE ERRORS:', hunt.errors.join('\n')); }
+const huntSaved = JSON.parse(hunt.storage.get('two.hunt.v1') || '{}');
+if (!huntSaved.pool?.['1005']) { failed = true; console.error('Hunt mode: weak player 1005 was not kept', huntSaved); }
+if (huntSaved.pool?.['1003']) { failed = true; console.error('Hunt mode: strong player 1003 was kept'); }
+if (!(huntSaved.cursor <= 1002)) { failed = true; console.error(`Hunt mode: expected the cursor past 1003, saw ${huntSaved.cursor}`); }
+const huntLink = (hunt.panel?.__twoHunt?.children || []).find(node => String(node.href || '').includes('user2ID=1005'));
+if (!huntLink || !/Pumpkin \[5\]/.test(huntLink.textContent)) { failed = true; console.error('Hunt mode: NEXT link to the weak player missing'); }
+
 const other = await boot({ pathname: '/index.php', search: '' });
 if (other.promptCalls !== 0 || other.errors.length > 0) { failed = true; console.error('Unrelated page: script should not run'); }
 
-console.log(failed ? 'SMOKE TEST FAILED' : `SMOKE TEST OK (faction warnings: ${faction.warnings.length}, attack warnings: ${attack.warnings.length + attackWithKey.warnings.length})`);
-for (const line of [...faction.warnings, ...attack.warnings, ...attackWithKey.warnings]) console.log(`  warn: ${line}`);
+console.log(failed ? 'SMOKE TEST FAILED' : `SMOKE TEST OK (faction warnings: ${faction.warnings.length}, attack warnings: ${attack.warnings.length + attackWithKey.warnings.length}, hunt warnings: ${hunt.warnings.length})`);
+for (const line of [...faction.warnings, ...attack.warnings, ...attackWithKey.warnings, ...hunt.warnings]) console.log(`  warn: ${line}`);
 process.exit(failed ? 1 : 0);

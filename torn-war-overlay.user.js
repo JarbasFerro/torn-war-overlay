@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.22.1
-// @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling.
+// @version      0.23.0
+// @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling, plus a hunt mode that scans for easy wins.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
 // @homepageURL  https://github.com/JarbasFerro/torn-war-overlay
@@ -34,15 +34,15 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0221__';
+  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0230__';
   if (window[INSTANCE_KEY]) {
-    console.warn(`[${SCRIPT}] v0.22.1 is already running; duplicate injection ignored.`);
+    console.warn(`[${SCRIPT}] v0.23.0 is already running; duplicate injection ignored.`);
     return;
   }
   window[INSTANCE_KEY] = true;
 
   const API_BASE = 'https://api.torn.com/v2';
-  const API_COMMENT = 'two-v0.22.1';
+  const API_COMMENT = 'two-v0.23.0';
   const PDA_API_KEY = '###PDA-APIKEY###';
 
   const KEY_STORAGE = 'two.apiKey.v1';
@@ -801,6 +801,9 @@
         localStorage.removeItem(ATTACK_HISTORY_CACHE_STORAGE);
         window.location.reload();
       });
+      GM_registerMenuCommand('Torn War Overlay: hunt mode on/off', () => setHuntEnabled(!huntState.enabled));
+      GM_registerMenuCommand('Torn War Overlay: restart hunt scan from my ID', () => { resetHuntCursor(); window.location.reload(); });
+      GM_registerMenuCommand('Torn War Overlay: clear hunt pool', () => { localStorage.removeItem(HUNT_STORAGE); window.location.reload(); });
       GM_registerMenuCommand('Torn War Overlay: clear personal intel memory', () => {
         localStorage.removeItem(OPPONENT_INTEL_STORAGE);
         localStorage.removeItem(SELF_INTEL_STORAGE);
@@ -4729,6 +4732,10 @@
       .two-sheet-body div:first-child { color:#fff; font-weight:700; }
       .two-sheet-actions { margin-top:10px; display:flex; justify-content:flex-start; gap:10px; align-items:center; }
       .two-sheet-link { color:#bfc8d0; font:700 11px/1.2 Arial,sans-serif; text-decoration:underline; padding:3px 4px; }
+      .two-attack-hunt { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:4px; padding-top:4px; border-top:1px solid rgba(255,255,255,.12); }
+      .two-hunt-toggle { appearance:none; -webkit-appearance:none; margin:0; padding:3px 7px; border-radius:4px; border:1px solid rgba(255,153,51,.6); background:rgba(60,32,8,.7); color:#ffc58a; font:800 9px/1 Arial,sans-serif; letter-spacing:.3px; cursor:pointer; touch-action:manipulation; }
+      .two-hunt-toggle.two-hunt-on { color:#1a0d00; background:#ff9a3c; border-color:#ffb470; }
+      .two-hunt-info { color:#bbb; font-weight:400; font-variant-numeric:tabular-nums; }
       .two-attack-detail { margin-top:4px; padding-top:4px; border-top:1px solid rgba(255,255,255,.12); font-weight:400; font-size:10px; color:#ccc; max-height:40vh; overflow:auto; }
       .two-attack-detail div { padding:1px 0; }
       .two-attack-detail div:first-child { color:#fff; font-weight:700; }
@@ -4964,6 +4971,7 @@
     if (strengthSaveTimer) { clearTimeout(strengthSaveTimer); strengthSaveTimer = null; }
     pruneStrengthCache();
     saveJson(STRENGTH_CACHE_STORAGE, strengthCache);
+    if (huntSaveTimer) saveHuntState({ now: true });
   }
 
   function runSelfTests() {
@@ -5125,6 +5133,23 @@
       if (cappedObservedWin.verdict !== 'RISKY') faults.push('capped observed escalates to risky');
       if (!proxyFromPopularStats({ drugs: { xanax: 5 }, other: { refills: { energy: 2 } }, items: { used: { energy_drinks: 3 } }, attacking: { elo: 1200, attacks: { won: 10, lost: 2 } } })) faults.push('popular stats parsing');
       if (proxyFromPopularStats({ attacking: { elo: 1200 } }) !== null) faults.push('popular stats without training');
+
+      // Hunt mode: the rank ceiling accepts weak players from the profile alone, the rank floor rejects strong ones.
+      const huntNow = 2_000_000_000;
+      const ownHuntScore = scoreFromStats(100_000_000);
+      const okay = { state: 'Okay' };
+      const huntWeak = classifyHuntProfile({ id: 9, rank: 'Beginner', level: 5, status: okay, last_action: { timestamp: huntNow } }, { ownScore: ownHuntScore, nowSec: huntNow });
+      if (huntWeak.action !== 'accept' || huntWeak.why !== 'rank' || huntWeak.readyAt !== huntNow) faults.push('hunt accepts weak rank');
+      const huntStrong = classifyHuntProfile({ id: 9, rank: 'Invincible', level: 20, status: okay }, { ownScore: ownHuntScore, nowSec: huntNow });
+      if (huntStrong.action !== 'skip') faults.push('hunt skips strong rank');
+      const huntMiddle = classifyHuntProfile({ id: 9, rank: 'Champion', level: 60, status: okay }, { ownScore: ownHuntScore, nowSec: huntNow });
+      if (huntMiddle.action !== 'deep') faults.push('hunt defers undecided rank');
+      if (classifyHuntProfile({ id: 9, rank: 'Beginner', level: 5, faction_id: 77, status: okay }, { ownScore: ownHuntScore, ownFaction: 77, nowSec: huntNow }).action !== 'skip') faults.push('hunt skips faction mates');
+      if (classifyHuntProfile({ id: 9, rank: 'Beginner', level: 5, status: { state: 'Federal' } }, { ownScore: ownHuntScore, nowSec: huntNow }).action !== 'skip') faults.push('hunt skips federal');
+      if (huntReadyAt({ state: 'Hospital', until: huntNow + 300 }, huntNow) !== huntNow + 300) faults.push('hunt hospital ready time');
+      if (huntReadyAt({ state: 'Traveling' }, huntNow) !== huntNow + HUNT_RECHECK_AWAY_SEC) faults.push('hunt away recheck');
+      if (huntBandLimits('Beginner', 5, 1_000_000_000) !== null) faults.push('hunt pre-rework rank');
+      if (!huntAcceptsEstimate({ ratio: 0.2, ratioHigh: 0.5 }) || huntAcceptsEstimate({ ratio: 0.2, ratioHigh: 0.7 }) || huntAcceptsEstimate({ ratio: 0.35, ratioHigh: 0.5 })) faults.push('hunt estimate acceptance');
       const debugText = JSON.stringify(getDiagnosticSnapshot());
       if (debugText.includes(String(apiKey || '___never___')) && apiKey) faults.push('diagnostic key leak');
       const before = apiPermanentlyDisabled;
@@ -5287,6 +5312,371 @@
     attackLogList = null;
   }
 
+  // ---------------------------------------------------------------------------
+  // Hunt mode (v0.23, built for the Halloween event): volume over quality. Walk user IDs downward from your own,
+  // keep everyone you should beat comfortably in a local pool, and offer the next ready one as a NEXT link.
+  //
+  // One profile request per ID does most of the work: the public rank minus the level triggers is a hard ceiling on
+  // the stat band (crime and networth triggers can only lower it), so a weak rank proves an easy win without a second
+  // call, and the lowest band the rank allows rules out strong players. Only the undecided middle costs a public-stats
+  // request. Paced well under Torn's 100 requests a minute and only while the attack page is in front. It never attacks.
+  // ---------------------------------------------------------------------------
+
+  const HUNT_STORAGE = 'two.hunt.v1';
+  const HUNT_REQUEST_GAP_MS = 1_500; // ~40/min, leaving the attack page's own polls well inside Torn's 100/min.
+  const HUNT_READY_TARGET = 25; // Stop scanning once this many targets are ready; resume when the pool drains.
+  const HUNT_POOL_MAX = 400;
+  const HUNT_MAX_WORST_RATIO = 0.6; // Even the strongest they could be leaves you ~93% to win.
+  const HUNT_RECHECK_AWAY_SEC = 20 * 60; // Travelling or unknown: look again later.
+  const HUNT_REVALIDATE_MS = 90_000; // A status older than this is re-read before a target is offered.
+  const HUNT_MAX_REVALIDATIONS = 4;
+  const HUNT_SKIP_STATES = Object.freeze(['federal', 'fallen']);
+
+  let huntState = loadHuntState();
+  let huntWorkerRunning = false;
+  let huntNext = null; // { userId, name, level } | null
+  let huntPicking = false;
+  let huntLastNote = '';
+  let huntSaveTimer = null;
+  const huntRequestTimes = [];
+
+  function loadHuntState() {
+    const raw = loadObjectJson(HUNT_STORAGE, {});
+    const cursor = Number(raw.cursor);
+    return {
+      enabled: Boolean(raw.enabled),
+      cursor: Number.isFinite(cursor) && cursor > 0 ? Math.floor(cursor) : null,
+      scanned: Number(raw.scanned) || 0,
+      found: Number(raw.found) || 0,
+      pool: raw.pool && typeof raw.pool === 'object' ? raw.pool : {},
+    };
+  }
+
+  // Throttled, not debounced: the scanner saves every 1.5 s, and a debounce would never fire while it runs.
+  function saveHuntState({ now = false } = {}) {
+    if (now) {
+      if (huntSaveTimer) { clearTimeout(huntSaveTimer); huntSaveTimer = null; }
+      saveJson(HUNT_STORAGE, huntState);
+      return;
+    }
+    if (huntSaveTimer) return;
+    huntSaveTimer = setTimeout(() => { huntSaveTimer = null; saveJson(HUNT_STORAGE, huntState); }, INTEL_SAVE_DEBOUNCE_MS);
+  }
+
+  function pruneHuntPool() {
+    const entries = Object.entries(huntState.pool);
+    if (entries.length <= HUNT_POOL_MAX) return;
+    entries.sort((a, b) => (Number(b[1].at) || 0) - (Number(a[1].at) || 0));
+    huntState.pool = Object.fromEntries(entries.slice(0, HUNT_POOL_MAX));
+  }
+
+  function levelTriggerCount(level) {
+    const lvl = Number(level);
+    return Number.isFinite(lvl) ? RANK_LEVEL_TRIGGERS.filter(x => x <= lvl).length : 0;
+  }
+
+  // Highest and lowest stat band a rank allows when crimes and networth are unknown. Null when undecodable.
+  function huntBandLimits(rank, level, lastActionTs = null) {
+    const index = RANK_INDEX[String(rank || '').trim()];
+    if (!index || !Number.isFinite(Number(level))) return null;
+    if (Number.isFinite(Number(lastActionTs)) && Number(lastActionTs) > 0 && Number(lastActionTs) < RANK_REWORK_EPOCH) return null;
+    const top = index - levelTriggerCount(level) - 1;
+    if (top < 0) return null;
+    const bottom = Math.max(0, top - RANK_CRIME_TRIGGERS.length - RANK_NETWORTH_TRIGGERS.length);
+    const last = RANK_STAT_BANDS.length - 1;
+    return { ceiling: RANK_STAT_BANDS[Math.min(top, last)], floor: RANK_STAT_BANDS[Math.min(bottom, last)] };
+  }
+
+  function huntOwnScore() {
+    const bss = getOwnBss();
+    if (bss) return bss;
+    const own = estimateScoreFromProxy(getOwnProxy(), getOwnAgeDays());
+    return own?.score || null;
+  }
+
+  // When the target can next be hit, in server seconds; null means never offer them.
+  function huntReadyAt(status, nowSec) {
+    const state = String(status?.state || '').toLowerCase();
+    if (HUNT_SKIP_STATES.includes(state)) return null;
+    if (state === 'okay') return nowSec;
+    const until = getStatusUntil(status);
+    if ((state === 'hospital' || state === 'jail') && until) return Math.max(nowSec, until);
+    return nowSec + HUNT_RECHECK_AWAY_SEC;
+  }
+
+  // Decide from the profile alone: accept (ceiling proves an easy win), skip, or deep (needs public stats).
+  function classifyHuntProfile(profile, { ownScore, ownUserId = null, ownFaction = null, nowSec = serverNowSec() } = {}) {
+    if (!profile || !ownScore) return { action: 'skip', reason: 'no data' };
+    const id = Number(profile.id);
+    if (ownUserId && id === Number(ownUserId)) return { action: 'skip', reason: 'you' };
+    if (ownFaction && Number(profile.faction_id) === Number(ownFaction)) return { action: 'skip', reason: 'faction mate' };
+    const readyAt = huntReadyAt(profile.status, nowSec);
+    if (readyAt === null) return { action: 'skip', reason: 'federal jail or fallen' };
+    const limits = huntBandLimits(profile.rank, profile.level, profile.last_action?.timestamp);
+    if (limits) {
+      if (limits.ceiling.hi !== null) {
+        const worst = scoreFromStats(limits.ceiling.hi) / ownScore;
+        if (worst < HUNT_MAX_WORST_RATIO) return { action: 'accept', why: 'rank', ratio: worst, band: limits.ceiling.label, readyAt };
+      }
+      const best = scoreFromStats(limits.floor.lo) / ownScore;
+      if (best >= VERDICT_EASY_MAX_RATIO) return { action: 'skip', reason: 'too strong' };
+    }
+    return { action: 'deep', readyAt };
+  }
+
+  // Accept from a full public-stats estimate only when the point estimate is EASY and even the high end is winnable.
+  function huntAcceptsEstimate(estimate) {
+    return Boolean(estimate) && estimate.ratio < VERDICT_EASY_MAX_RATIO && estimate.ratioHigh < HUNT_MAX_WORST_RATIO;
+  }
+
+  const HUNT_CLOCK_SLACK_SEC = 5; // The server clock anchor can move back a little between a scan and a pick.
+
+  function huntReadyIds(nowSec = serverNowSec()) {
+    return Object.entries(huntState.pool)
+      .filter(([id, entry]) => Number(id) !== attackTargetId && Number(entry.ready) <= nowSec + HUNT_CLOCK_SLACK_SEC)
+      .sort((a, b) => (Number(a[1].ready) || 0) - (Number(b[1].ready) || 0))
+      .map(([id]) => Number(id));
+  }
+
+  function huntRatePerMinute() {
+    const cutoff = Date.now() - 60_000;
+    while (huntRequestTimes.length && huntRequestTimes[0] < cutoff) huntRequestTimes.shift();
+    return huntRequestTimes.length;
+  }
+
+  async function huntApiGet(path, options) {
+    huntRequestTimes.push(Date.now());
+    return apiGet(path, options);
+  }
+
+  async function ensureHuntCursor() {
+    if (huntState.cursor) return huntState.cursor;
+    let ownId = Number((await ensurePrimaryKeyInfo())?.info?.user?.id);
+    if (!Number.isFinite(ownId) || ownId <= 0) ownId = Number((await apiGet('/user/basic'))?.profile?.id);
+    if (!Number.isFinite(ownId) || ownId <= 1) throw new ApiError('Could not read your own user ID.');
+    huntState.cursor = ownId - 1;
+    saveHuntState({ now: true });
+    return huntState.cursor;
+  }
+
+  function huntCanRun() {
+    return huntState.enabled && PAGE_MODE === 'attack' && attackPageVisible() && apiKey && !apiPermanentlyDisabled && intelEnabled();
+  }
+
+  // Returns the number of requests spent, so the worker can keep its pace per request rather than per ID.
+  async function huntScanOne(ownScore) {
+    const id = huntState.cursor;
+    huntState.cursor = id - 1;
+    const nowSec = serverNowSec();
+    let profile;
+    try {
+      profile = (await huntApiGet(`/user/${id}/profile`))?.profile;
+    } catch (err) {
+      if (Number(err?.code) === 6) { huntState.scanned += 1; return 1; } // No such user.
+      if (err?.retryable || err?.message === 'API backoff active.') huntState.cursor = id; // Retry this ID after the backoff.
+      throw err;
+    }
+    huntState.scanned += 1;
+    if (!profile) return 1;
+    if (!profile.id) profile.id = id;
+    const verdict = classifyHuntProfile(profile, { ownScore, ownUserId: Number(primaryKeyInfo?.info?.user?.id) || null, ownFaction: ownFactionId, nowSec });
+    if (verdict.action === 'skip') return 1;
+    rememberProfileFacts(id, profile);
+    const signedUp = Number(profile.signed_up);
+    if (Number.isFinite(signedUp) && signedUp > 0) setSignedUp(id, signedUp);
+    let accepted = verdict.action === 'accept' ? verdict : null;
+    let requests = 1;
+    if (verdict.action === 'deep' && !strengthUnsupported) {
+      requests += 1;
+      let stats = null;
+      try {
+        stats = await huntApiGet(`/user/${id}/personalstats`, { query: { cat: 'popular' } });
+      } catch (err) {
+        if (Number(err?.code) === 7 || Number(err?.code) === 16) strengthUnsupported = true;
+        else throw err;
+      }
+      const proxy = proxyFromPopularStats(stats?.personalstats);
+      if (proxy) {
+        proxy.rank = typeof profile.rank === 'string' ? profile.rank : null;
+        proxy.level = Number.isFinite(Number(profile.level)) ? Number(profile.level) : null;
+        proxy.lastAction = Number(profile.last_action?.timestamp) || null;
+        const estimate = estimateMatchFromProxy(proxy, getOwnProxy(), { theirAgeDays: getAgeDaysForUser(id), ownAgeDays: getOwnAgeDays(), ownBss: getOwnBss(), calibration: getCalibration() });
+        if (huntAcceptsEstimate(estimate)) {
+          storeStrengthProxy(id, proxy); // The attack page then shows the verdict without another request.
+          accepted = { why: 'estimate', ratio: estimate.ratio, band: estimate.band?.label || '', readyAt: verdict.readyAt };
+        }
+      }
+    }
+    if (!accepted) return requests;
+    huntState.pool[String(id)] = {
+      n: typeof profile.name === 'string' ? profile.name : '',
+      l: Number(profile.level) || null,
+      why: accepted.why,
+      r: Math.round(accepted.ratio * 1000) / 1000,
+      ready: accepted.readyAt,
+      checked: Date.now(),
+      at: Date.now(),
+    };
+    huntState.found += 1;
+    pruneHuntPool();
+    if (!huntNext) huntPickNext();
+    return requests;
+  }
+
+  async function runHuntWorker() {
+    if (huntWorkerRunning) return;
+    huntWorkerRunning = true;
+    let nextAllowedAt = 0;
+    try {
+      while (huntCanRun()) {
+        if (Date.now() < globalBackoffUntil) { huntLastNote = 'API backoff'; renderAttackPanel(); await sleep(Math.min(2_000, globalBackoffUntil - Date.now())); continue; }
+        const ownScore = huntOwnScore();
+        if (!ownScore) { huntLastNote = 'reading your stats'; renderAttackPanel(); await sleep(1_000); continue; }
+        if (huntReadyIds().length >= HUNT_READY_TARGET) { huntLastNote = 'pool full'; renderAttackPanel(); await sleep(5_000); continue; }
+        const cursor = await ensureHuntCursor();
+        if (cursor < 1) { huntLastNote = 'reached ID 1'; renderAttackPanel(); break; }
+        const wait = nextAllowedAt - Date.now();
+        if (wait > 0) { await sleep(wait); continue; }
+        const started = Date.now();
+        huntLastNote = 'scanning';
+        try {
+          const requests = await huntScanOne(ownScore);
+          nextAllowedAt = started + HUNT_REQUEST_GAP_MS * Math.max(1, requests || 1);
+          registerApiSuccess();
+        } catch (err) {
+          nextAllowedAt = started + HUNT_REQUEST_GAP_MS;
+          if (err?.message !== 'API backoff active.') {
+            registerApiFailure(err);
+            console.warn(`[${SCRIPT}] Hunt scan failed`, err);
+          }
+        }
+        saveHuntState();
+        renderAttackPanel();
+      }
+    } catch (err) {
+      huntLastNote = 'stopped: could not start';
+      console.warn(`[${SCRIPT}] Hunt worker stopped`, err);
+    } finally {
+      huntWorkerRunning = false;
+      saveHuntState({ now: true });
+      renderAttackPanel();
+    }
+  }
+
+  // Offer the oldest-ready pool entry, re-reading its status first when the stored one is stale.
+  async function huntPickNext() {
+    if (huntPicking || !huntState.enabled || !apiKey || apiPermanentlyDisabled) return;
+    huntPicking = true;
+    try {
+      huntNext = null;
+      let revalidations = 0;
+      for (const id of huntReadyIds()) {
+        const entry = huntState.pool[String(id)];
+        if (!entry) continue;
+        if (Date.now() - (Number(entry.checked) || 0) > HUNT_REVALIDATE_MS) {
+          if (revalidations >= HUNT_MAX_REVALIDATIONS || Date.now() < globalBackoffUntil) break;
+          revalidations += 1;
+          let profile;
+          try {
+            profile = (await huntApiGet(`/user/${id}/basic`, { cacheBust: true }))?.profile;
+          } catch (err) {
+            if (Number(err?.code) === 6) { delete huntState.pool[String(id)]; continue; }
+            throw err;
+          }
+          const readyAt = huntReadyAt(profile?.status, serverNowSec());
+          if (readyAt === null) { delete huntState.pool[String(id)]; continue; }
+          entry.ready = readyAt;
+          entry.checked = Date.now();
+          if (typeof profile?.name === 'string') entry.n = profile.name;
+          if (Number(profile?.level)) entry.l = Number(profile.level);
+          if (readyAt > serverNowSec() + HUNT_CLOCK_SLACK_SEC) continue;
+        }
+        huntNext = { userId: id, name: entry.n || `#${id}`, level: entry.l };
+        break;
+      }
+    } catch (err) {
+      if (err?.message !== 'API backoff active.') console.warn(`[${SCRIPT}] Could not pick a hunt target`, err);
+    } finally {
+      huntPicking = false;
+      saveHuntState();
+      renderAttackPanel();
+    }
+  }
+
+  function huntOnAttackPageOpened() {
+    // The target being fought now leaves the ready set until a later re-check proves it is free again.
+    const entry = huntState.pool[String(attackTargetId)];
+    if (entry) { entry.ready = serverNowSec() + 60; entry.checked = 0; saveHuntState(); }
+  }
+
+  function setHuntEnabled(enabled) {
+    huntState.enabled = Boolean(enabled);
+    saveHuntState({ now: true });
+    if (huntState.enabled) { huntPickNext(); runHuntWorker(); } else { huntNext = null; }
+    renderAttackPanel();
+  }
+
+  function resetHuntCursor() {
+    huntState.cursor = null;
+    huntState.scanned = 0;
+    huntState.found = 0;
+    saveHuntState({ now: true });
+  }
+
+  function renderAttackHunt(row) {
+    if (!row) return;
+    const nowSec = serverNowSec();
+    const ready = huntState.enabled ? huntReadyIds(nowSec).length : 0;
+    const poolSize = Object.keys(huntState.pool).length;
+    const rate = huntRatePerMinute();
+    const note = !intelEnabled() ? 'turn intel on in SET' : huntLastNote;
+    const signature = `${huntState.enabled}|${ready}|${poolSize}|${huntState.cursor}|${rate}|${note}|${huntPicking}|${huntNext?.userId || ''}`;
+    if (row.dataset.twoSignature === signature) return;
+    row.dataset.twoSignature = signature;
+    row.replaceChildren();
+
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = `two-hunt-toggle${huntState.enabled ? ' two-hunt-on' : ''}`;
+    toggle.textContent = huntState.enabled ? 'HUNT ON' : 'HUNT';
+    toggle.title = huntState.enabled
+      ? 'Hunt mode is scanning player IDs downward from yours for easy wins. Tap to stop.'
+      : 'Halloween hunt mode: scan player IDs downward from yours and keep a pool of easy wins. Tap to start.';
+    toggle.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      setHuntEnabled(!huntState.enabled);
+    });
+    row.appendChild(toggle);
+    if (!huntState.enabled) return;
+
+    const info = document.createElement('span');
+    info.className = 'two-hunt-info';
+    const cursorText = huntState.cursor ? `#${formatCount(huntState.cursor)}` : '';
+    info.textContent = [`${ready} ready`, cursorText, rate ? `${rate}/min` : '', note && note !== 'scanning' ? note : ''].filter(Boolean).join(' · ');
+    info.title = `Pool: ${poolSize} easy targets kept (${ready} free to hit now). Scanned ${formatCount(huntState.scanned)} IDs, kept ${formatCount(huntState.found)}. Next ID to check: ${huntState.cursor ?? 'your ID - 1'}. Targets in hospital or jail come back when their timer ends.`;
+    row.appendChild(info);
+
+    if (huntPicking) {
+      const wait = document.createElement('span');
+      wait.className = 'two-attack-next-none';
+      wait.textContent = 'checking…';
+      row.appendChild(wait);
+      return;
+    }
+    if (!huntNext) return;
+    const link = document.createElement('a');
+    link.className = 'two-attack-next-link';
+    link.href = `/loader.php?sid=attack&user2ID=${huntNext.userId}`;
+    const level = Number.isFinite(Number(huntNext.level)) && huntNext.level ? ` [${huntNext.level}]` : '';
+    link.textContent = `${huntNext.name}${level} ▸`;
+    const entry = huntState.pool[String(huntNext.userId)];
+    link.title = entry?.why === 'rank'
+      ? `Easy: their rank caps them at ${Math.round((entry.r || 0) * 100)}% of your strength or less. Status checked in the last ${Math.max(1, Math.round((Date.now() - (entry.checked || 0)) / 60_000))} min.`
+      : `Easy: public stats put them near ${Math.round((entry?.r || 0) * 100)}% of your strength.`;
+    row.appendChild(link);
+  }
+
   function onAttackFightFinished(result) {
     attackFightResult = { ...result, at: Date.now() };
     incStat('fightResultsCaptured');
@@ -5294,7 +5684,12 @@
     // The API record lags the page by a few seconds; ingest twice so the observed verdict lands before the next fight.
     setTimeout(() => ingestRecentAttacksOnAttackPage(), 4_000);
     setTimeout(() => ingestRecentAttacksOnAttackPage(), 15_000);
-    loadNextTarget();
+    if (result.kind === 'loss' && huntState.pool[String(attackTargetId)]) {
+      delete huntState.pool[String(attackTargetId)]; // The estimate was wrong for this one; never offer them again.
+      saveHuntState();
+    }
+    if (huntState.enabled) huntPickNext(); // Hunt targets are rarely in a faction; the roster NEXT would waste requests.
+    else loadNextTarget();
   }
 
   function ingestMembersSnapshot(members) {
@@ -5493,6 +5888,9 @@
     });
     head.append(name, verdict, status, finish, chain, energy, toggle, close);
 
+    const hunt = document.createElement('div');
+    hunt.className = 'two-attack-hunt';
+
     const next = document.createElement('div');
     next.className = 'two-attack-next';
     next.hidden = true;
@@ -5501,7 +5899,7 @@
     detail.className = 'two-attack-detail';
     detail.hidden = true;
 
-    panel.append(head, next, detail);
+    panel.append(head, next, hunt, detail);
     panel.__twoName = name;
     panel.__twoVerdict = verdict;
     panel.__twoStatus = status;
@@ -5509,6 +5907,7 @@
     panel.__twoEnergy = energy;
     panel.__twoFinish = finish;
     panel.__twoNext = next;
+    panel.__twoHunt = hunt;
     panel.__twoDetail = detail;
     (document.body || document.documentElement).appendChild(panel);
     attackPanel = panel;
@@ -5553,6 +5952,7 @@
     renderEnergyChip(panel.__twoEnergy);
     renderFinishChip(panel.__twoFinish, userId);
     renderAttackNext(panel.__twoNext);
+    renderAttackHunt(panel.__twoHunt);
 
     const detail = panel.__twoDetail;
     detail.hidden = !attackPanelExpanded;
@@ -5604,7 +6004,7 @@
     const resultText = result.kind === 'win'
       ? `WIN${result.respect !== null ? ` +${result.respect.toFixed(2)}` : ''}`
       : result.kind === 'loss' ? 'LOSS' : 'STALEMATE';
-    const signature = `${resultText}|${attackNextLoading ? 'loading' : ''}|${attackNextTarget?.userId || ''}|${attackNextTarget?.reason || ''}|${attackNextTarget?.intel?.evLabel || ''}`;
+    const signature = `${resultText}|${huntState.enabled ? 'hunt' : ''}|${attackNextLoading ? 'loading' : ''}|${attackNextTarget?.userId || ''}|${attackNextTarget?.reason || ''}|${attackNextTarget?.intel?.evLabel || ''}`;
     if (row.dataset.twoSignature === signature) return;
     row.dataset.twoSignature = signature;
     row.replaceChildren();
@@ -5613,6 +6013,7 @@
     resultChip.textContent = resultText;
     resultChip.title = result.line;
     row.appendChild(resultChip);
+    if (huntState.enabled) return; // The hunt row below carries the next target.
     const label = document.createElement('span');
     label.className = 'two-attack-next-label';
     label.textContent = 'NEXT';
@@ -5668,6 +6069,7 @@
     if (!attackPageVisible() || PAGE_MODE !== 'attack') return;
     if (!attackTickTimer) attackPageTick();
     attachAttackLogObserver();
+    if (huntState.enabled) runHuntWorker(); // Stops by itself when the page is hidden.
     refreshOwnBars().then(() => renderAttackPanel()).catch(() => { /* handled inside */ });
     // pageshow fires on the initial load too; do not double up a poll that is already pending or fresh.
     const statusAgeMs = attackStatusLastAt > 0 ? monotonicNowMs() - attackStatusLastAt : Number.POSITIVE_INFINITY;
@@ -5724,6 +6126,9 @@
         fetchStrength(attackTargetId).then(() => renderAttackPanel()).catch(err => console.warn(`[${SCRIPT}] Could not fetch target public stats`, err));
       }
     }
+
+    huntOnAttackPageOpened();
+    if (huntState.enabled) huntPickNext();
 
     resumeAttackPage();
     document.addEventListener('visibilitychange', () => { if (attackPageVisible()) resumeAttackPage(); else pauseAttackPage(); });

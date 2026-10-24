@@ -22,6 +22,7 @@ The script is designed primarily for **Torn PDA** and also supports standard use
 - The same verdict, `EV`, hospital countdown, chain state (with a `BONUS #n` warning) and your energy on the attack page itself, in a small floating panel with a tap-to-expand explanation.
 - A `LEAVE` or `HOSP` hint before each fight, from published war guidance: leave offline farm targets, hospitalize active or strong ones.
 - After each fight the panel shows the result and a `NEXT` link to the best green target on the roster right now.
+- Hunt mode for the Halloween event: a `HUNT` button on the attack page that scans user IDs for easy wins and keeps a local pool of them, with a `NEXT` link after each fight.
 - Adaptive API polling, caching, incremental attack-history updates and foreground-only live processing.
 
 ## Default target rules
@@ -85,6 +86,18 @@ Personal intel is learned only from your own outgoing attack records. Nothing is
 
 Personal intel requires a Limited key, or a Custom key granting `user -> attacks` and `user -> battlestats`. War and chain chips work with a Public key.
 
+## Hunt mode (Halloween)
+
+Hunt mode is built for Torn's Halloween event, where the number of easy wins matters more than the respect per hit. To start, open any attack page and tap `HUNT` on the panel (it shows `HUNT ON` while active). The userscript menu also has "hunt mode on/off", "restart hunt scan from my ID" and "clear hunt pool". The script scans user IDs one by one downward, starting at your own ID minus 1, and saves its position so it resumes on the next attack page. The hunt row shows how many targets are ready, the next ID to scan (for example `#1,002`), requests per minute and a `Name [level] ▸` link to the next ready target. After a fight, `NEXT` comes from the hunt pool instead of the enemy faction roster. You open every attack yourself; the script never attacks or clicks for you.
+
+Each ID costs one `/user/{id}/profile` request. Torn's public rank puts a hard ceiling on a player's stats, so a weak rank proves an easy win with no further request, and a rank that only allows strong players rules them out. Only undecided players cost a second request (public personal stats). They are kept only if the estimate is `EASY` (under 30% of your strength) and even the high end of the estimate is under 60%, which is about a 93% win chance at worst. Rank-based accepts use the same 60% worst case.
+
+- Skipped: nonexistent IDs, yourself, your faction mates, players in federal jail and fallen accounts.
+- Pool: up to 400 kept targets. Targets in hospital or jail return when their timer ends; travelling ones are re-checked after 20 minutes. A target's status is re-read before it is offered if the stored one is older than 90 seconds. A target you lose to is removed.
+- Pacing: about 40 requests a minute (Torn's limit is 100), only while the attack page is visible. Scanning pauses once 25 targets are ready and honors the existing API backoff.
+- Requirements: personal intel turned on (the default), because hunt mode needs your own strength. A Limited key gives your exact battle stats; otherwise your public-stats estimate is used. It works with a Public key.
+- Storage: the pool and scan position are stored locally under `two.hunt.v1`.
+
 ## API, privacy and safety
 
 Torn War Overlay communicates only with Torn's official API at `api.torn.com`.
@@ -102,9 +115,9 @@ Torn API ToS disclosure:
 
 | Item | Statement |
 |---|---|
-| Data storage | Faction statuses, account ages, public training stats, your own attack results and derived opponent intel are stored locally on the device/browser only. |
+| Data storage | Faction statuses, account ages, public training stats, your own attack results and derived opponent intel, plus the hunt-mode target pool and scan position, are stored locally on the device/browser only. |
 | Data sharing | None. No backend, no analytics, no third-party service. |
-| Purpose of use | Ranked-war target overlay on the faction page and attack page. |
+| Purpose of use | Ranked-war target overlay on the faction page and attack page, and a hunt mode on the attack page that finds easy targets for the Halloween event. You open every attack yourself. |
 | Key storage and sharing | Manual keys are stored in local browser storage and sent only to `api.torn.com`. Torn PDA supplies its own key. Keys are never shared. |
 | Key access level | Public for the core overlay. Limited (or Custom with `user -> attacks` and `user -> battlestats`) for personal intel. |
 
@@ -159,9 +172,11 @@ Do **not** post API keys in an issue.
 
 ## Development status
 
-Current release candidate: **v0.22.0**.
+Current release candidate: **v0.23.0**.
 
-v0.22.0 adds the Leave or Hospitalize hint. v0.21.0 adds the tap-to-explain sheet on the faction list. v0.20.0 captures each fight's result on the attack page and offers the next best target. v0.19.0 bounds every estimate by Torn's rank band and models win probability from the combat formulas. v0.18 added list filters, `OUT EARLY` labels and several live-war fixes. v0.17.0 carries the verdict, expected value, hospital countdown and chain state onto the attack page. v0.16.0 replaced the v0.15 strength estimate with a model built on Torn's gym formula, natural energy and self-calibration from real fights. The green/yellow targeting path is unchanged since v0.13.1 apart from the null-timer fix and API-sourced levels; old members now show their exact age instead of `>=1.5y`.
+v0.23.0 adds hunt mode for the Halloween event. v0.22.0 adds the Leave or Hospitalize hint. v0.21.0 adds the tap-to-explain sheet on the faction list. v0.20.0 captures each fight's result on the attack page and offers the next best target. v0.19.0 bounds every estimate by Torn's rank band and models win probability from the combat formulas. v0.18 added list filters, `OUT EARLY` labels and several live-war fixes. v0.17.0 carries the verdict, expected value, hospital countdown and chain state onto the attack page. v0.16.0 replaced the v0.15 strength estimate with a model built on Torn's gym formula, natural energy and self-calibration from real fights. The green/yellow targeting path is unchanged since v0.13.1 apart from the null-timer fix and API-sourced levels; old members now show their exact age instead of `>=1.5y`.
+
+Hunt mode (v0.23.0) has so far only been exercised against a stubbed API; the first live session should confirm the ready count grows and the `NEXT` targets are real easy wins.
 
 The v0.13 line was validated in real ranked-war use. v0.14 to v0.16 need the same real-war validation before promotion; `docs/RESEARCH-2026-09-13.md` explains the model and lists what to check.
 

@@ -4,6 +4,18 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.23.0 - Hunt mode for the Halloween event
+
+- New hunt mode, built for Torn's Halloween event where the volume of easy wins matters more than respect. It lives on the attack page panel as a `HUNT` button (`HUNT ON` while active) and in the userscript menu as "hunt mode on/off", "restart hunt scan from my ID" and "clear hunt pool". To start, open any attack page and tap `HUNT`.
+- The scan walks user IDs downward one by one, starting at your own user ID minus 1, and saves its position locally so it resumes on the next attack page. Each ID costs one `/user/{id}/profile` request. Torn's public rank minus the level triggers is a hard ceiling on the stat band (crime and networth triggers can only lower it), so a weak rank proves an easy win with no second call, and the lowest band the rank allows rules out strong players. Only undecided players cost a second request (public personal stats); they are kept only if the estimate is `EASY` (under 30% of your strength) and even the high end of the estimate is under 60% (about 93% win chance at worst). Rank-ceiling accepts also use the 60% worst case.
+- Nonexistent IDs, yourself, your faction mates, players in federal jail and fallen accounts are skipped.
+- Kept targets go into a local pool of up to 400. Targets in hospital or jail return when their timer ends, and travelling ones are re-checked after 20 minutes. Before a target is offered its status is re-read if the stored one is older than 90 seconds. A target you lose to is removed from the pool.
+- The hunt row shows the ready count, the next ID to scan (for example `#1,002`), requests per minute and a `Name [level] ▸` link to the next ready target. After a fight in hunt mode, `NEXT` comes from the hunt pool instead of the enemy faction roster.
+- Pacing is about 40 requests a minute (1.5 seconds per request; an ID that needs two requests waits twice as long), only while the attack page is visible. Scanning pauses once 25 targets are ready and honors the existing API backoff. Torn's limit is 100 per minute.
+- Hunt mode needs personal intel turned on (the default) because it needs your own strength: exact battle stats with a Limited key, otherwise your public-stats estimate. It works with a Public key. It never attacks or clicks for you; you open each attack yourself.
+- State is stored locally under `two.hunt.v1`; nothing is sent anywhere except `api.torn.com`.
+- The smoke test now also boots hunt mode with a stubbed API (it keeps a weak player, skips a strong one and a missing ID, and shows the `NEXT` link). Nine new built-in self-tests cover the hunt classifier.
+
 ## 0.22.1 - Losses show up
 
 - The attack page now recognises Torn's defeat line, "X lost to Y", so a lost fight shows `LOSS` and triggers NEXT like a win does.
