@@ -4,6 +4,14 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.23.1 - Hunt mode keeps going, weakest first
+
+- The scan no longer pauses once 25 targets are ready; it keeps going while the attack page is visible, still at about 40 requests a minute.
+- The pool now holds up to 5,000 targets (was 400) in a compact format of about 0.4 MB. When it is full, the strongest player is dropped, so it always holds the weakest found so far.
+- `NEXT` offers the weakest player who is out of hospital and not travelling. Players whose hospital or jail timer has run out count as free; travelling or unknown players come last. A target is only offered when a fresh status check says they can be hit.
+- The hunt row also shows how many targets are kept.
+- Pools saved by v0.23.0 are converted automatically.
+
 ## 0.23.0 - Hunt mode for the Halloween event
 
 - New hunt mode, built for Torn's Halloween event where the volume of easy wins matters more than respect. It lives on the attack page panel as a `HUNT` button (`HUNT ON` while active) and in the userscript menu as "hunt mode on/off", "restart hunt scan from my ID" and "clear hunt pool". To start, open any attack page and tap `HUNT`.
