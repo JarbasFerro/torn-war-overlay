@@ -101,7 +101,7 @@ async function boot({ pathname, search, seed = {}, fetchImpl = null, waitMs = 15
   vm.createContext(sandbox);
   vm.runInContext(source, sandbox, { filename: 'torn-war-overlay.user.js' });
   await new Promise(resolve => setTimeout(resolve, waitMs));
-  return { errors, warnings, promptCalls, storage, mounted: body.children.length, panel: body.children[0] || null };
+  return { errors, warnings, promptCalls, storage, mounted: body.children.length, panel: body.children.find(node => node.__twoName) || null, dock: body.children.find(node => node.__twoHuntDock) || null };
 }
 
 let failed = false;
@@ -173,8 +173,14 @@ if (!(huntSaved.cursor <= 1002)) { failed = true; console.error(`Hunt mode: expe
 const ghost = huntSaved.pool?.['2001'];
 if (!ghost || ghost.s !== 'o' || !(ghost.c > 0) || ghost.a !== nowSec - 86400) { failed = true; console.error('Hunt mode: stale target 2001 was not refreshed from its faction roster', ghost); }
 if (huntUrls.filter(url => url.includes('/user/2001/')).length > 0) { failed = true; console.error('Hunt mode: target 2001 was refreshed per user instead of by faction roster'); }
-const huntLink = (hunt.panel?.__twoHunt?.children || []).find(node => String(node.href || '').includes('user2ID=2001'));
-if (!huntLink || !/Ghost \[3\]/.test(huntLink.textContent)) { failed = true; console.error('Hunt mode: NEXT link to the refreshed target missing'); }
+const dock = hunt.dock;
+if (!dock || dock.hidden) { failed = true; console.error('Hunt mode: bottom dock not shown'); }
+if (hunt.panel && !hunt.panel.hidden) { failed = true; console.error('Hunt mode: the war panel should be hidden while hunting'); }
+if (!dock?.__link || dock.__link.hidden || !String(dock.__link.href || '').includes('user2ID=2001') || !/^Skip ▸ Ghost · L3$/.test(dock.__linkMain.textContent)) {
+  failed = true; console.error('Hunt mode: dock NEXT button for the refreshed target missing', dock?.__linkMain?.textContent, dock?.__link?.href);
+}
+if (!/^\d+$/.test(dock?.__pumpCount?.textContent || '')) { failed = true; console.error('Hunt mode: ready count missing on the hunt button'); }
+if (!/^⚡/.test(dock?.__energy?.textContent || '') || !/Energy unavailable/.test(dock?.__energy?.title || '')) { failed = true; console.error('Hunt mode: energy chip should explain a missing energy read', dock?.__energy?.title); }
 
 const other = await boot({ pathname: '/index.php', search: '' });
 if (other.promptCalls !== 0 || other.errors.length > 0) { failed = true; console.error('Unrelated page: script should not run'); }

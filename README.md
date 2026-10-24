@@ -22,7 +22,7 @@ The script is designed primarily for **Torn PDA** and also supports standard use
 - The same verdict, `EV`, hospital countdown, chain state (with a `BONUS #n` warning) and your energy on the attack page itself, in a small floating panel with a tap-to-expand explanation.
 - A `LEAVE` or `HOSP` hint before each fight, from published war guidance: leave offline farm targets, hospitalize active or strong ones.
 - After each fight the panel shows the result and a `NEXT` link to the best green target on the roster right now.
-- Hunt mode for the Halloween event: a `HUNT` button on the attack page that scans user IDs for easy wins and keeps a local pool of them, with a `NEXT` link after each fight.
+- Hunt mode for the Halloween event: a `HUNT` button on the attack page that scans user IDs for easy wins, keeps a local pool of them, and shows a bottom-docked panel with a large `NEXT` button.
 - Adaptive API polling, caching, incremental attack-history updates and foreground-only live processing.
 
 ## Default target rules
@@ -88,7 +88,7 @@ Personal intel requires a Limited key, or a Custom key granting `user -> attacks
 
 ## Hunt mode (Halloween)
 
-Hunt mode is built for Torn's Halloween event, where the number of easy wins matters more than the respect per hit. To start, open any attack page and tap `HUNT` on the panel (it shows `HUNT ON` while active). The userscript menu also has "hunt mode on/off", "restart hunt scan from my ID" and "clear hunt pool". The script scans user IDs one by one downward, starting at your own ID minus 1, and saves its position so it resumes on the next attack page. The hunt row shows how many targets are confirmed free against the goal (for example `14/20 free`), how many are kept, the next ID to scan (for example `#1,002`), requests per minute and a `Name [level] ▸` link to the next free target. After a fight, `NEXT` comes from the hunt pool instead of the enemy faction roster. You open every attack yourself; the script never attacks or clicks for you.
+Hunt mode is built for Torn's Halloween event, where the number of easy wins matters more than the respect per hit. To start, open any attack page and tap `HUNT` on the panel; the userscript menu also has "hunt mode on/off", "restart hunt scan from my ID" and "clear hunt pool". While hunting, the attack page shows a panel docked at the bottom of the screen instead of the top panel. Its top line shows the target, a verdict badge, status and your energy as hits, with a short line on how to finish the fight. The large button below carries the next target: `Skip ▸ Name` before the fight and a bright `NEXT ▸ Name` after it. The orange button next to it shows how many targets are confirmed free; tap it or `i` for details and `Stop hunting`. `–` minimises the panel to a small pill. The script scans user IDs one by one downward, starting at your own ID minus 1, and saves its position so it resumes on the next attack page. You open every attack yourself; the script never attacks or clicks for you.
 
 Each ID costs one `/user/{id}/profile` request. Torn's public rank puts a hard ceiling on a player's stats, so a weak rank proves an easy win with no further request, and a rank that only allows strong players rules them out. Only undecided players cost a second request (public personal stats). They are kept only if the estimate is `EASY` (under 30% of your strength) and even the high end of the estimate is under 60%, which is about a 93% win chance at worst. Rank-based accepts use the same 60% worst case.
 
@@ -173,9 +173,9 @@ Do **not** post API keys in an issue.
 
 ## Development status
 
-Current release candidate: **v0.23.2**.
+Current release candidate: **v0.24.0**.
 
-v0.23.0 adds hunt mode for the Halloween event. v0.22.0 adds the Leave or Hospitalize hint. v0.21.0 adds the tap-to-explain sheet on the faction list. v0.20.0 captures each fight's result on the attack page and offers the next best target. v0.19.0 bounds every estimate by Torn's rank band and models win probability from the combat formulas. v0.18 added list filters, `OUT EARLY` labels and several live-war fixes. v0.17.0 carries the verdict, expected value, hospital countdown and chain state onto the attack page. v0.16.0 replaced the v0.15 strength estimate with a model built on Torn's gym formula, natural energy and self-calibration from real fights. The green/yellow targeting path is unchanged since v0.13.1 apart from the null-timer fix and API-sourced levels; old members now show their exact age instead of `>=1.5y`.
+v0.24.0 adds the bottom-docked hunt panel. v0.23.0 adds hunt mode for the Halloween event. v0.22.0 adds the Leave or Hospitalize hint. v0.21.0 adds the tap-to-explain sheet on the faction list. v0.20.0 captures each fight's result on the attack page and offers the next best target. v0.19.0 bounds every estimate by Torn's rank band and models win probability from the combat formulas. v0.18 added list filters, `OUT EARLY` labels and several live-war fixes. v0.17.0 carries the verdict, expected value, hospital countdown and chain state onto the attack page. v0.16.0 replaced the v0.15 strength estimate with a model built on Torn's gym formula, natural energy and self-calibration from real fights. The green/yellow targeting path is unchanged since v0.13.1 apart from the null-timer fix and API-sourced levels; old members now show their exact age instead of `>=1.5y`.
 
 Hunt mode (v0.23.0) has so far only been exercised against a stubbed API; the first live session should confirm the ready count grows and the `NEXT` targets are real easy wins.
 

@@ -4,6 +4,18 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.24.0 - Hunt dock
+
+- In hunt mode the attack page swaps the top panel for a panel docked at the bottom of the screen, under your thumb and clear of Torn's HP bars. The war panel is unchanged.
+- One large button carries the next target: `Skip ▸ Name · L1` before the fight, and a bright `NEXT ▸ Name · L1` once the fight is over. Its second line says why that target was picked (how weak they are and when their status was confirmed), or your hits left after a fight.
+- The orange hunt button shows how many targets are confirmed free. Tapping it, or `i`, opens the details: pool, scanner, today's wins and losses, energy and the target's intel, plus a `Stop hunting` button.
+- The top line shows the target, a solid verdict badge without EV (war respect does not matter while hunting), status and your energy as hits.
+- Before the fight a short line says how to finish: Leave, so offline targets are back for another hit sooner, or Hospitalize when they are active. It appears before the fight because the script only sees the result after you choose.
+- After each fight the dock shows the result and today's wins and losses (Torn time).
+- `–` minimises the dock to a small `HUNT n` pill while hunting continues; it opens again by itself after a fight.
+- Buttons are at least 34 px, and the main ones 44 to 50 px, for reliable taps.
+- When your energy cannot be read, the dock now says why instead of hiding it.
+
 ## 0.23.2 - Hunt mode keeps its list current
 
 - Hunt mode now stops once enough targets are confirmed free: twice the hits your current energy allows, at least 20 and at most 100. "Confirmed free" means okay and in Torn at a check in the last 10 minutes. The row shows this as `free/goal`, for example `14/20 free`.

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.23.2
+// @version      0.24.0
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling, plus a hunt mode that scans for easy wins.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -34,15 +34,15 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0232__';
+  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0240__';
   if (window[INSTANCE_KEY]) {
-    console.warn(`[${SCRIPT}] v0.23.2 is already running; duplicate injection ignored.`);
+    console.warn(`[${SCRIPT}] v0.24.0 is already running; duplicate injection ignored.`);
     return;
   }
   window[INSTANCE_KEY] = true;
 
   const API_BASE = 'https://api.torn.com/v2';
-  const API_COMMENT = 'two-v0.23.2';
+  const API_COMMENT = 'two-v0.24.0';
   const PDA_API_KEY = '###PDA-APIKEY###';
 
   const KEY_STORAGE = 'two.apiKey.v1';
@@ -4732,10 +4732,45 @@
       .two-sheet-body div:first-child { color:#fff; font-weight:700; }
       .two-sheet-actions { margin-top:10px; display:flex; justify-content:flex-start; gap:10px; align-items:center; }
       .two-sheet-link { color:#bfc8d0; font:700 11px/1.2 Arial,sans-serif; text-decoration:underline; padding:3px 4px; }
+      .two-hunt-dock { position:fixed; left:50%; bottom:calc(env(safe-area-inset-bottom, 0px) + 8px); transform:translateX(-50%); width:min(calc(100vw - 12px), 520px); z-index:99999; box-sizing:border-box; padding:8px; border-radius:12px; border:1px solid rgba(255,255,255,.16); background:#151515; color:#ddd; font:700 12px/1.25 Arial,sans-serif; box-shadow:0 -4px 16px rgba(0,0,0,.55); }
+      .two-hunt-dock[hidden], .two-hunt-dock [hidden] { display:none !important; }
+      .two-hunt-dock.two-hunt-dock-min { left:auto; right:8px; transform:none; width:auto; padding:0; border-radius:22px; background:transparent; border:0; box-shadow:none; }
+      .two-hd-top { display:flex; align-items:center; gap:7px; }
+      .two-hd-name { flex:1 1 auto; min-width:0; color:#fff; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .two-hd-verdict { padding:4px 7px; border-radius:5px; font-size:11px; letter-spacing:.3px; color:#ddd; background:#444; }
+      .two-hd-v-easy { color:#dcffc4; background:#2f6b17; }
+      .two-hd-v-good { color:#fff3c4; background:#6b5a17; }
+      .two-hd-v-risky { color:#ffe0c4; background:#8a4a12; }
+      .two-hd-v-avoid { color:#ffd0c8; background:#8a1f17; }
+      .two-hd-status { font-size:11px; white-space:nowrap; font-variant-numeric:tabular-nums; color:#bfc8d0; }
+      .two-hd-s-okay { color:#c9ffa0; }
+      .two-hd-s-hospital { color:#ff9b8f; }
+      .two-hd-s-soon { color:#ffd36a; }
+      .two-hd-s-due { color:#c6ff84; }
+      .two-hd-energy { color:#ffe28a; font-size:12px; white-space:nowrap; font-variant-numeric:tabular-nums; }
+      .two-hd-energy.two-hd-energy-out { color:#ff9b8f; }
+      .two-hd-icon { appearance:none; -webkit-appearance:none; flex:0 0 34px; width:34px; height:34px; margin:0; padding:0; border-radius:50%; border:1px solid rgba(255,255,255,.22); background:rgba(255,255,255,.07); color:#ddd; font:800 14px/1 Arial,sans-serif; cursor:pointer; touch-action:manipulation; }
+      .two-hd-hint { margin-top:5px; color:#9fe0a0; font-weight:400; font-size:11px; }
+      .two-hd-result { display:flex; align-items:center; gap:8px; margin-top:5px; }
+      .two-hd-res { padding:4px 8px; border-radius:5px; font-size:12px; }
+      .two-hd-res-win { color:#dcffc4; background:#2f6b17; }
+      .two-hd-res-loss { color:#ffd0c8; background:#8a1f17; }
+      .two-hd-res-stalemate { color:#ddd; background:#444; }
+      .two-hd-session { margin-left:auto; color:#aaa; font-weight:400; font-size:11px; font-variant-numeric:tabular-nums; }
+      .two-hd-actions { display:flex; gap:7px; margin-top:7px; align-items:stretch; }
+      .two-hd-pump { appearance:none; -webkit-appearance:none; flex:0 0 auto; min-width:56px; min-height:50px; margin:0; padding:4px 8px; border:0; border-radius:10px; background:#ff9a3c; color:#1a0d00; display:flex; flex-direction:column; align-items:center; justify-content:center; font:700 10px/1.1 Arial,sans-serif; cursor:pointer; touch-action:manipulation; }
+      .two-hd-pump b { font-size:18px; font-variant-numeric:tabular-nums; }
+      .two-hd-next { flex:1 1 auto; min-width:0; min-height:50px; box-sizing:border-box; display:flex; flex-direction:column; justify-content:center; padding:4px 12px; border-radius:10px; border:1px solid rgba(255,224,102,.75); background:#4a3906; color:#fff7d1; text-decoration:none; touch-action:manipulation; }
+      .two-hd-next.two-hd-next-hot { background:#ffd23f; color:#231a00; border-color:#fff1a8; box-shadow:0 0 0 3px rgba(255,210,63,.28); }
+      .two-hd-next.two-hd-next-wait { border-style:dashed; border-color:rgba(255,255,255,.2); background:rgba(255,255,255,.04); color:#bbb; }
+      .two-hd-next-main { font-size:15px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .two-hd-next-sub { font-size:11px; font-weight:400; opacity:.85; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .two-hd-detail { margin-top:7px; padding-top:7px; border-top:1px solid rgba(255,255,255,.12); font-weight:400; font-size:11px; color:#ccc; max-height:38vh; overflow:auto; }
+      .two-hd-detail div { padding:2px 0; }
+      .two-hd-stop { appearance:none; -webkit-appearance:none; margin-top:6px; min-height:40px; padding:0 14px; border-radius:8px; border:1px solid rgba(255,120,100,.55); background:rgba(80,24,18,.7); color:#ffd0c8; font:700 12px Arial,sans-serif; cursor:pointer; }
+      .two-hd-pill { appearance:none; -webkit-appearance:none; min-height:44px; padding:0 16px; border-radius:22px; border:1px solid #ffb470; background:#ff9a3c; color:#1a0d00; font:800 13px/1 Arial,sans-serif; box-shadow:0 2px 10px rgba(0,0,0,.5); cursor:pointer; touch-action:manipulation; }
       .two-attack-hunt { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:4px; padding-top:4px; border-top:1px solid rgba(255,255,255,.12); }
       .two-hunt-toggle { appearance:none; -webkit-appearance:none; margin:0; padding:3px 7px; border-radius:4px; border:1px solid rgba(255,153,51,.6); background:rgba(60,32,8,.7); color:#ffc58a; font:800 9px/1 Arial,sans-serif; letter-spacing:.3px; cursor:pointer; touch-action:manipulation; }
-      .two-hunt-toggle.two-hunt-on { color:#1a0d00; background:#ff9a3c; border-color:#ffb470; }
-      .two-hunt-info { color:#bbb; font-weight:400; font-variant-numeric:tabular-nums; }
       .two-attack-detail { margin-top:4px; padding-top:4px; border-top:1px solid rgba(255,255,255,.12); font-weight:400; font-size:10px; color:#ccc; max-height:40vh; overflow:auto; }
       .two-attack-detail div { padding:1px 0; }
       .two-attack-detail div:first-child { color:#fff; font-weight:700; }
@@ -5241,6 +5276,7 @@
   let ownBars = null; // { energyCurrent, energyMax, fullTime, fetchedAt }
   let ownBarsLastAt = 0;
   let ownBarsUnsupported = false;
+  let ownBarsError = ''; // Why energy is missing, shown in the hunt dock instead of silently hiding it.
   const ATTACK_LOG_SELECTOR = 'ul[aria-describedby="log-header"]';
   const OWN_BARS_REFRESH_MS = 60_000;
 
@@ -5379,6 +5415,8 @@
       scanned: Number(raw.scanned) || 0,
       found: Number(raw.found) || 0,
       pool: normalizeHuntPool(raw.pool),
+      session: raw.session && typeof raw.session === 'object' ? { day: String(raw.session.day || ''), w: Number(raw.session.w) || 0, l: Number(raw.session.l) || 0 } : null,
+      minimized: Boolean(raw.minimized),
     };
   }
 
@@ -5787,62 +5825,277 @@
     saveHuntState({ now: true });
   }
 
+  // On the war panel the hunt row is only the way in; once hunting, the bottom dock takes over.
   function renderAttackHunt(row) {
-    if (!row) return;
-    const nowSec = serverNowSec();
-    const ready = huntState.enabled ? huntConfirmedCount(nowSec) : 0;
-    const goal = huntAvailableGoal();
-    const poolSize = Object.keys(huntState.pool).length;
-    const rate = huntRatePerMinute();
-    const note = !intelEnabled() ? 'turn intel on in SET' : huntLastNote;
-    const signature = `${huntState.enabled}|${ready}/${goal}|${poolSize}|${huntState.cursor}|${rate}|${note}|${huntPicking}|${huntNext?.userId || ''}`;
-    if (row.dataset.twoSignature === signature) return;
-    row.dataset.twoSignature = signature;
-    row.replaceChildren();
-
+    if (!row || row.__twoHuntButton) return;
     const toggle = document.createElement('button');
     toggle.type = 'button';
-    toggle.className = `two-hunt-toggle${huntState.enabled ? ' two-hunt-on' : ''}`;
-    toggle.textContent = huntState.enabled ? 'HUNT ON' : 'HUNT';
-    toggle.title = huntState.enabled
-      ? 'Hunt mode is scanning player IDs downward from yours for easy wins. Tap to stop.'
-      : 'Halloween hunt mode: scan player IDs downward from yours and keep a pool of easy wins. Tap to start.';
+    toggle.className = 'two-hunt-toggle';
+    toggle.textContent = 'HUNT';
+    toggle.title = 'Halloween hunt mode: scan player IDs downward from yours and keep a pool of easy wins. Tap to start.';
     toggle.addEventListener('click', event => {
       event.preventDefault();
       event.stopPropagation();
-      setHuntEnabled(!huntState.enabled);
+      setHuntEnabled(true);
     });
     row.appendChild(toggle);
-    if (!huntState.enabled) return;
+    row.__twoHuntButton = toggle;
+  }
 
-    const info = document.createElement('span');
-    info.className = 'two-hunt-info';
-    const cursorText = huntState.cursor ? `#${formatCount(huntState.cursor)}` : '';
-    info.textContent = [`${ready}/${goal} free`, `${formatCount(poolSize)} kept`, cursorText, rate ? `${rate}/min` : '', note && note !== 'scanning' ? note : ''].filter(Boolean).join(' · ');
-    info.title = `${ready} targets confirmed free in the last ${HUNT_FRESH_SEC / 60} min; the goal is ${goal} (twice the hits your energy allows, at least ${HUNT_MIN_AVAILABLE}). Below the goal it re-checks the weakest saved targets first (one faction roster request covers all saved members of that faction; hospital timers cost nothing until they run out), and scans new IDs only when nothing is left to re-check. Pool: ${formatCount(poolSize)} kept (up to ${formatCount(HUNT_POOL_MAX)}; the strongest are dropped first). Scanned ${formatCount(huntState.scanned)} IDs. Next ID: ${huntState.cursor ?? 'your ID - 1'}.`;
-    row.appendChild(info);
+  // Hunt dock (v0.24): in hunt mode the attack page swaps the top panel for a bottom-docked one built around the
+  // repeated loop (is this one easy, fight, next). It sits under the thumb and off Torn's HP bars, and the one button
+  // that matters, NEXT, is large and turns bright once the fight is over. The war panel is unchanged.
+  let huntDock = null;
+  let huntDetailOpen = false;
 
-    if (huntPicking) {
-      const wait = document.createElement('span');
-      wait.className = 'two-attack-next-none';
-      wait.textContent = 'checking…';
-      row.appendChild(wait);
+  function huntTodayKey() {
+    return new Date(serverNowMs()).toISOString().slice(0, 10); // Torn City Time is UTC.
+  }
+
+  function huntSession() {
+    const today = huntTodayKey();
+    if (!huntState.session || huntState.session.day !== today) huntState.session = { day: today, w: 0, l: 0 };
+    return huntState.session;
+  }
+
+  function huntRecordResult(kind) {
+    const session = huntSession();
+    if (kind === 'win') session.w += 1;
+    else if (kind === 'loss') session.l += 1;
+    saveHuntState();
+  }
+
+  function setText(el, text) {
+    if (el && el.textContent !== text) el.textContent = text;
+  }
+
+  function setClass(el, className) {
+    if (el && el.className !== className) el.className = className;
+  }
+
+  function attackStatusView() {
+    const profile = attackTargetProfile;
+    const state = String(profile?.status?.state || '').toLowerCase();
+    const seconds = attackTargetSecondsLeft();
+    let text = profile ? (profile.status?.state || 'Status ?') : 'Loading…';
+    let tone = '';
+    if (state === 'hospital' && Number.isFinite(seconds)) {
+      text = seconds <= 0 ? 'DUE' : `HOSP ${formatClock(seconds)}`;
+      tone = seconds <= 0 ? 'due' : seconds <= 60 ? 'soon' : 'hospital';
+    } else if (state === 'okay') {
+      text = 'OKAY';
+      tone = 'okay';
+    } else if (state === 'traveling' || state === 'abroad') {
+      text = profile.status.description || state.toUpperCase();
+      tone = 'away';
+    } else if (state === 'jail' && Number.isFinite(seconds)) {
+      text = `JAIL ${formatClock(Math.max(0, seconds))}`;
+      tone = 'away';
+    }
+    const ageSec = attackStatusLastAt > 0 ? Math.floor((monotonicNowMs() - attackStatusLastAt) / 1000) : null;
+    const title = ageSec === null ? 'Waiting for the first status check' : `Status from the Torn API ${ageSec}s ago`;
+    return { text, tone, title };
+  }
+
+  function huntCheckedAgo(entry) {
+    const sec = Math.max(0, Math.floor(Date.now() / 1000 - (Number(entry?.c) || 0)));
+    if (!entry?.c) return '';
+    return sec < 60 ? 'okay just now' : `okay ${formatDurationCompact(sec)} ago`;
+  }
+
+  function makeDockButton(className, text, label, onClick) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = className;
+    button.textContent = text;
+    button.title = label;
+    button.setAttribute('aria-label', label);
+    button.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      onClick();
+    });
+    return button;
+  }
+
+  function ensureHuntDock() {
+    if (huntDock?.isConnected) return huntDock;
+    const dock = document.createElement('div');
+    dock.className = 'two-hunt-dock';
+    dock.setAttribute('role', 'region');
+    dock.setAttribute('aria-label', 'Torn War Overlay hunt mode');
+
+    const full = document.createElement('div');
+    full.className = 'two-hd-full';
+
+    const top = document.createElement('div');
+    top.className = 'two-hd-top';
+    const name = document.createElement('span');
+    name.className = 'two-hd-name';
+    const verdict = document.createElement('span');
+    const status = document.createElement('span');
+    const energy = document.createElement('span');
+    energy.className = 'two-hd-energy';
+    const info = makeDockButton('two-hd-icon', 'i', 'Show hunt details', () => { huntDetailOpen = !huntDetailOpen; renderAttackPanel(); });
+    const minimize = makeDockButton('two-hd-icon', '–', 'Minimise; hunting continues', () => { huntState.minimized = true; saveHuntState(); renderAttackPanel(); });
+    top.append(name, verdict, status, energy, info, minimize);
+
+    const hint = document.createElement('div');
+    hint.className = 'two-hd-hint';
+
+    const result = document.createElement('div');
+    result.className = 'two-hd-result';
+    const resultChip = document.createElement('span');
+    const session = document.createElement('span');
+    session.className = 'two-hd-session';
+    result.append(resultChip, session);
+
+    const actions = document.createElement('div');
+    actions.className = 'two-hd-actions';
+    const pump = makeDockButton('two-hd-pump', '', 'Hunt details', () => { huntDetailOpen = !huntDetailOpen; renderAttackPanel(); });
+    const pumpCount = document.createElement('b');
+    const pumpLabel = document.createElement('span');
+    pumpLabel.textContent = 'ready';
+    pump.append(pumpCount, pumpLabel);
+    const link = document.createElement('a');
+    link.className = 'two-hd-next';
+    const linkMain = document.createElement('span');
+    linkMain.className = 'two-hd-next-main';
+    const linkSub = document.createElement('span');
+    linkSub.className = 'two-hd-next-sub';
+    link.append(linkMain, linkSub);
+    const waiting = document.createElement('div');
+    waiting.className = 'two-hd-next two-hd-next-wait';
+    const waitMain = document.createElement('span');
+    waitMain.className = 'two-hd-next-main';
+    const waitSub = document.createElement('span');
+    waitSub.className = 'two-hd-next-sub';
+    waiting.append(waitMain, waitSub);
+    actions.append(pump, link, waiting);
+
+    const detail = document.createElement('div');
+    detail.className = 'two-hd-detail';
+    detail.hidden = true;
+
+    full.append(top, hint, result, actions, detail);
+
+    const pill = makeDockButton('two-hd-pill', '', 'Show the hunt panel', () => { huntState.minimized = false; saveHuntState(); renderAttackPanel(); });
+
+    dock.append(full, pill);
+    Object.assign(dock, {
+      __twoHuntDock: true, __full: full, __name: name, __verdict: verdict, __status: status, __energy: energy, __hint: hint,
+      __result: result, __resultChip: resultChip, __session: session, __pumpCount: pumpCount, __link: link,
+      __linkMain: linkMain, __linkSub: linkSub, __waiting: waiting, __waitMain: waitMain, __waitSub: waitSub,
+      __detail: detail, __pill: pill,
+    });
+    (document.body || document.documentElement).appendChild(dock);
+    huntDock = dock;
+    return dock;
+  }
+
+  function renderHuntDock() {
+    const dock = ensureHuntDock();
+    dock.hidden = false;
+    const userId = attackTargetId;
+    const nowSec = serverNowSec();
+    const ready = huntConfirmedCount(nowSec);
+    const minimized = Boolean(huntState.minimized);
+    dock.__full.hidden = minimized;
+    dock.__pill.hidden = !minimized;
+    setClass(dock, `two-hunt-dock${minimized ? ' two-hunt-dock-min' : ''}`);
+    if (minimized) {
+      setText(dock.__pill, `HUNT ${ready} ▴`);
       return;
     }
-    if (!huntNext) return;
-    const link = document.createElement('a');
-    link.className = 'two-attack-next-link';
-    link.href = `/loader.php?sid=attack&user2ID=${huntNext.userId}`;
-    const level = Number.isFinite(Number(huntNext.level)) && huntNext.level ? ` [${huntNext.level}]` : '';
-    link.textContent = `${huntNext.name}${level} ▸`;
-    const entry = huntState.pool[String(huntNext.userId)];
-    const pct = Math.max(1, Math.round((Number(entry?.r) || 0) * 100));
-    const idleSec = Number(entry?.a) > 0 ? Math.max(0, Math.floor(nowSec - Number(entry.a))) : null;
-    const presence = idleSec === null ? '' : idleSec < 5 * 60 ? ' Active in the last 5 minutes.' : ` Last active ${formatDurationCompact(idleSec)} ago.`;
-    link.title = (entry?.w === 'r'
-      ? `Easy: their rank caps them at ${pct}% of your strength or less.`
-      : `Easy: public stats put them near ${pct}% of your strength.`) + ` Okay and in Torn at the last check.${presence}`;
-    row.appendChild(link);
+
+    const profile = attackTargetProfile;
+    const level = profile?.level ?? memberMetaByUser.get(userId)?.level ?? null;
+    setText(dock.__name, `${profile?.name || `Target ${userId}`}${Number(level) > 0 ? ` · L${level}` : ''}`);
+
+    const intel = intelEnabled() ? getOpponentIntel(userId) : null;
+    const verdict = intel?.verdict || null;
+    setText(dock.__verdict, verdict || '?');
+    setClass(dock.__verdict, `two-hd-verdict two-hd-v-${verdict ? verdict.toLowerCase() : 'unknown'}`);
+    dock.__verdict.title = intel ? describeIntel(intel, userId) : 'No estimate yet';
+
+    const status = attackStatusView();
+    dock.__status.hidden = Boolean(attackFightResult); // The polled status lags the finished fight by up to 10 s.
+    setText(dock.__status, status.tone === 'okay' ? '● OKAY' : status.text);
+    setClass(dock.__status, `two-hd-status two-hd-s-${status.tone || 'none'}`);
+    dock.__status.title = status.title;
+
+    const hits = ownBars ? Math.floor(ownBars.energyCurrent / ENERGY_PER_ATTACK) : null;
+    setText(dock.__energy, hits === null ? '⚡ –' : `⚡${hits}`);
+    dock.__energy.classList.toggle('two-hd-energy-out', hits === 0);
+    dock.__energy.title = ownBars
+      ? `Energy ${ownBars.energyCurrent}/${ownBars.energyMax}: ${hits} hit${hits === 1 ? '' : 's'} at 25 each.`
+      : `Energy unavailable${ownBarsError ? `: ${ownBarsError}` : ' (not read yet)'}.`;
+
+    const result = attackFightResult;
+    dock.__hint.hidden = Boolean(result);
+    if (!result) {
+      const finish = finishHintForUser(userId);
+      setText(dock.__hint, finish.action === 'LEAVE'
+        ? 'If you win: Leave, so they are back for another hit sooner'
+        : 'If you win: Hospitalize, they are active right now');
+      dock.__hint.title = finish.reason;
+    }
+    dock.__result.hidden = !result;
+    if (result) {
+      const resultText = result.kind === 'win' ? `WIN${result.respect !== null ? ` +${result.respect.toFixed(2)}` : ''}` : result.kind === 'loss' ? 'LOSS' : 'STALEMATE';
+      setText(dock.__resultChip, resultText);
+      setClass(dock.__resultChip, `two-hd-res two-hd-res-${result.kind}`);
+      dock.__resultChip.title = result.line;
+      const session = huntSession();
+      setText(dock.__session, `${session.w} W · ${session.l} L today`);
+    }
+
+    setText(dock.__pumpCount, String(ready));
+
+    const hot = Boolean(result);
+    const entry = huntNext ? huntState.pool[String(huntNext.userId)] : null;
+    const showLink = Boolean(huntNext) && !huntPicking;
+    dock.__link.hidden = !showLink;
+    dock.__waiting.hidden = showLink;
+    if (showLink) {
+      dock.__link.href = `/loader.php?sid=attack&user2ID=${huntNext.userId}`;
+      setClass(dock.__link, `two-hd-next${hot ? ' two-hd-next-hot' : ''}`);
+      setText(dock.__linkMain, `${hot ? 'NEXT' : 'Skip'} ▸ ${huntNext.name}${Number(huntNext.level) > 0 ? ` · L${huntNext.level}` : ''}`);
+      const pct = Math.round((Number(entry?.r) || 0) * 100);
+      const strength = pct < 1 ? 'under 1% of your strength' : `${entry?.w === 'r' ? 'at most' : 'about'} ${pct}% of your strength`;
+      const why = [strength, huntCheckedAgo(entry)].filter(Boolean).join(' · ');
+      setText(dock.__linkSub, hot && hits !== null ? `⚡ ${hits} hit${hits === 1 ? '' : 's'} left` : why);
+      dock.__link.title = why;
+    } else {
+      setText(dock.__waitMain, huntPicking ? 'Checking the next target…' : 'No free target yet');
+      setText(dock.__waitSub, !intelEnabled() ? 'turn intel on in SET on the faction page' : huntLastNote || 'starting');
+    }
+
+    dock.__detail.hidden = !huntDetailOpen;
+    if (huntDetailOpen) renderHuntDetail(dock.__detail, { ready, nowSec, intel, userId });
+  }
+
+  function renderHuntDetail(detail, { ready, intel, userId }) {
+    const poolSize = Object.keys(huntState.pool).length;
+    const goal = huntAvailableGoal();
+    const session = huntSession();
+    const lines = [
+      `Hunt: ${ready} targets confirmed free in the last ${HUNT_FRESH_SEC / 60} min (goal ${goal}: twice your hits, at least ${HUNT_MIN_AVAILABLE}). ${formatCount(poolSize)} saved.`,
+      `Scanner: ${huntLastNote || 'idle'} · ${huntRatePerMinute()} requests/min · next ID #${huntState.cursor ? formatCount(huntState.cursor) : '?'} · ${formatCount(huntState.scanned)} IDs checked.`,
+      `Today: ${session.w} win${session.w === 1 ? '' : 's'}, ${session.l} loss${session.l === 1 ? '' : 'es'}.`,
+      ownBars ? `Energy ${ownBars.energyCurrent}/${ownBars.energyMax}.` : `Energy unavailable${ownBarsError ? `: ${ownBarsError}` : ' (not read yet)'}.`,
+      ...(intel ? describeIntel(intel, userId).split(' | ') : []),
+    ];
+    const signature = lines.join('\n');
+    if (detail.dataset.twoSignature === signature) return;
+    detail.dataset.twoSignature = signature;
+    const rows = lines.map(line => {
+      const row = document.createElement('div');
+      row.textContent = line;
+      return row;
+    });
+    const stop = makeDockButton('two-hd-stop', 'Stop hunting', 'Turn hunt mode off and return to the war panel', () => { huntDetailOpen = false; setHuntEnabled(false); });
+    detail.replaceChildren(...rows, stop);
   }
 
   function onAttackFightFinished(result) {
@@ -5855,6 +6108,11 @@
     if (result.kind === 'loss' && huntState.pool[String(attackTargetId)]) {
       delete huntState.pool[String(attackTargetId)]; // The estimate was wrong for this one; never offer them again.
       saveHuntState();
+    }
+    if (huntState.enabled) {
+      huntRecordResult(result.kind);
+      if (huntState.minimized) { huntState.minimized = false; saveHuntState(); } // The NEXT button must be in view now.
+      renderAttackPanel();
     }
     if (huntState.enabled) huntPickNext(); // Hunt targets are rarely in a faction; the roster NEXT would waste requests.
     else loadNextTarget();
@@ -5934,10 +6192,18 @@
           fullTime: Math.max(0, Number(energy.full_time ?? energy.fulltime) || 0),
           fetchedAt: Date.now(),
         };
+        ownBarsError = '';
+      } else {
+        ownBarsError = 'the API reply had no energy bar';
       }
     } catch (err) {
-      if (Number(err?.code) === 16 || Number(err?.code) === 7) ownBarsUnsupported = true;
-      else if (err?.message !== 'API backoff active.') console.warn(`[${SCRIPT}] Could not read own energy`, err);
+      if (Number(err?.code) === 16 || Number(err?.code) === 7) {
+        ownBarsUnsupported = true;
+        ownBarsError = 'this API key cannot read your bars (it needs Minimal or Limited access)';
+      } else if (err?.message !== 'API backoff active.') {
+        ownBarsError = err?.message || 'request failed';
+        console.warn(`[${SCRIPT}] Could not read own energy`, err);
+      }
     }
     return ownBars;
   }
@@ -6084,7 +6350,14 @@
 
   function renderAttackPanel() {
     if (PAGE_MODE !== 'attack' || !attackTargetId || attackPanelHidden) return;
+    if (huntState.enabled) {
+      if (attackPanel) attackPanel.hidden = true;
+      renderHuntDock();
+      return;
+    }
+    if (huntDock) huntDock.hidden = true;
     const panel = ensureAttackPanel();
+    panel.hidden = false;
     const userId = attackTargetId;
     const profile = attackTargetProfile;
     const level = profile?.level ?? getBestLevelForUser(userId);
@@ -6094,27 +6367,10 @@
 
     renderIntelBadge(panel.__twoVerdict, userId, { ideal: false, good: false });
 
-    const state = String(profile?.status?.state || '').toLowerCase();
-    const seconds = attackTargetSecondsLeft();
-    let statusText = profile ? (profile.status?.state || 'Status ?') : 'Loading…';
-    let statusClass = 'two-attack-status';
-    if (state === 'hospital' && Number.isFinite(seconds)) {
-      statusText = seconds <= 0 ? 'DUE' : `HOSP ${formatClock(seconds)}`;
-      statusClass += seconds <= 0 ? ' two-attack-status-due' : seconds <= 60 ? ' two-attack-status-soon' : ' two-attack-status-hospital';
-    } else if (state === 'okay') {
-      statusText = 'OKAY';
-      statusClass += ' two-attack-status-okay';
-    } else if (state === 'traveling' || state === 'abroad') {
-      statusText = profile.status.description || state.toUpperCase();
-      statusClass += ' two-attack-status-away';
-    } else if (state === 'jail' && Number.isFinite(seconds)) {
-      statusText = `JAIL ${formatClock(Math.max(0, seconds))}`;
-      statusClass += ' two-attack-status-away';
-    }
-    const ageSec = attackStatusLastAt > 0 ? Math.floor((monotonicNowMs() - attackStatusLastAt) / 1000) : null;
-    panel.__twoStatus.textContent = statusText;
-    panel.__twoStatus.className = statusClass;
-    panel.__twoStatus.title = ageSec === null ? 'Waiting for the first status check' : `Status from the Torn API ${ageSec}s ago`;
+    const status = attackStatusView();
+    panel.__twoStatus.textContent = status.text;
+    panel.__twoStatus.className = `two-attack-status${status.tone ? ` two-attack-status-${status.tone}` : ''}`;
+    panel.__twoStatus.title = status.title;
 
     renderChainChip(panel.__twoChain);
     renderEnergyChip(panel.__twoEnergy);
