@@ -4,6 +4,13 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.33.0 - One attack-log pipeline
+
+- The three readers of your attack log (war dots and personal intel on the faction page, the quick intel read on the attack page, and hit goals) now share one paging routine and one hand-off: every fight fetched by any of them also updates your hit goals, counted once by fight id.
+- Fewer requests while hunting: the attack page's intel reads 4 and 15 seconds after each fight now keep `Today`/`Event` current, so the separate hit-goal request after each win is skipped whenever those reads already cover everything since the last count (one request instead of two per fight in the usual case). The 2-minute goals poll is skipped the same way.
+- Fix: on the faction page, an unexpected reply while reading your attack history switched personal intel off until the page was reloaded. Only an access-level error (codes 7 and 16) or a rejected key does that now; anything else keeps the cached dots and retries shortly.
+- The paging rules live in one place (newest first; `from` exclusive and `to` inclusive per the Torn API v2 spec; resume where a long walk stopped) instead of three copies.
+
 ## 0.32.0 - One error policy and one refresh helper
 
 - Fix: your faction's chain (attack page) and ranked-war context (hunt guard) switched themselves off until the page was reloaded after a single bad reply, such as a temporary "Incorrect ID". Only an access-level error (codes 7 and 16: this key cannot read it) now turns a feature off for the session; any other failure is logged and retried at the next refresh.

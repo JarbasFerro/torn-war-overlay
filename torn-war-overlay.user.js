@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.32.0
+// @version      0.33.0
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling, plus a hunt mode that scans for easy wins.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -36,7 +36,7 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const SCRIPT_VERSION = '0.32.0';
+  const SCRIPT_VERSION = '0.33.0';
   const INSTANCE_KEY = '__TORN_WAR_OVERLAY__';
   if (window[INSTANCE_KEY]) {
     console.warn(`[${SCRIPT}] v${window[INSTANCE_KEY]} is already running; duplicate injection of v${SCRIPT_VERSION} ignored.`);
@@ -4295,6 +4295,72 @@
     return dotsChanged;
   }
 
+  // ---------------------------------------------------------------------------
+  // Attack log (v0.33): every reader of /user/attacks (faction-page war dots, attack-page intel, hit goals) pages the
+  // same way through pageOutgoingAttacks, and every page goes through noteOutgoingAttacks, so a fight fetched by one
+  // reader counts for all. Pages arrive newest first; `from` is exclusive and `to` inclusive (Torn API v2), so the
+  // boundary fight repeats and is deduplicated by id.
+  // ---------------------------------------------------------------------------
+
+  // Walks back from `to` (or now) towards `from`, up to maxPages. complete: a short page or no progress shows
+  // everything in the range is in; otherwise resumeTo is where the next call continues. shouldAbort is checked after
+  // each request and before the page is used.
+  async function pageOutgoingAttacks({ from, to = null, maxPages, limit = ATTACKS_PAGE_LIMIT, lane = 'background', onPage = null, shouldAbort = null }) {
+    let pageTo = to;
+    for (let page = 1; page <= maxPages; page += 1) {
+      const data = await apiGet('/user/attacks', {
+        query: {
+          filters: 'outgoing',
+          sort: 'DESC',
+          limit,
+          from: Math.max(0, Math.floor(from)),
+          ...(pageTo !== null ? { to: Math.floor(pageTo) } : {}),
+        },
+        cacheBust: true,
+        keyOverride: attackApiKey || null,
+        lane,
+      });
+      if (shouldAbort?.()) return { aborted: true, complete: false, resumeTo: pageTo, pages: page };
+      const attacks = Array.isArray(data?.attacks) ? data.attacks : [];
+      const short = attacks.length < limit;
+      noteOutgoingAttacks(attacks, { from, newest: pageTo === null, complete: short });
+      if (onPage) onPage(attacks);
+      if (short) return { aborted: false, complete: true, resumeTo: null, pages: page };
+      const oldest = attacks.reduce((min, item) => {
+        const started = Number(item?.started);
+        return Number.isFinite(started) && started > 0 ? Math.min(min, started) : min;
+      }, Number.POSITIVE_INFINITY);
+      if (!Number.isFinite(oldest) || (pageTo !== null && oldest >= pageTo)) return { aborted: false, complete: true, resumeTo: null, pages: page };
+      pageTo = oldest;
+    }
+    return { aborted: false, complete: false, resumeTo: pageTo, pages: maxPages };
+  }
+
+  // Hit goals take every fight any reader fetched. Once the goals' own first walk is done, a complete newest page that
+  // reaches back past the goals cursor covers everything since it, so the goals poll can wait.
+  function noteOutgoingAttacks(attacks, { from = 0, newest = false, complete = false } = {}) {
+    if (!Array.isArray(attacks) || !attacks.length) return;
+    const windowStart = hitWindowStart();
+    let changed = false;
+    let newestStarted = 0;
+    for (const raw of attacks) {
+      const id = String(raw?.id ?? raw?.code ?? '');
+      const started = Number(raw?.started);
+      if (!id || !Number.isFinite(started)) continue;
+      newestStarted = Math.max(newestStarted, started);
+      if (started < windowStart || hitGoals.seen[id]) continue;
+      hitGoals.seen[id] = [started, classifyAttackResult(raw?.result).kind === 'win' ? 1 : 0];
+      changed = true;
+    }
+    if (newest && complete && hitGoals.cursor > 0 && hitGoals.fillTo === null && from <= hitGoals.cursor) {
+      hitGoals.cursor = Math.max(hitGoals.cursor, newestStarted);
+      hitWonAt = Date.now();
+      hitWonNow = Object.keys(hitGoals.seen).length; // The tally is complete up to now: show it.
+      changed = true;
+    }
+    if (changed) { saveJson(GOALS_STORAGE, hitGoals); if (hitWonNow !== null) renderAttackPanel(); }
+  }
+
   async function refreshRecentAttacks() {
     if (!activeFactionId || !isActiveView() || !apiKey) {
       clearAttackRefreshTimer();
@@ -4330,67 +4396,33 @@
         const requestScopeKey = attackHistoryScope?.key || null;
         const baseFrom = Number(attackHistoryScope?.from || 0);
         let budget = ATTACKS_PAGES_PER_CYCLE;
-
-        // /user/attacks pages are capped at 100 rows and arrive newest first. One page is fetched with `from` and
-        // older pages are reached by walking `to` backwards. Returns the oldest `started` on the page, or null when
-        // the page was short (nothing older remains in the requested range) or the flight must abort.
-        const fetchPage = async (from, to) => {
-          const data = await apiGet('/user/attacks', {
-            query: {
-              filters: 'outgoing',
-              sort: 'DESC',
-              limit: ATTACKS_PAGE_LIMIT,
-              from: Math.max(0, Math.floor(from)),
-              ...(to !== null ? { to: Math.floor(to) } : {}),
-            },
-            cacheBust: true,
-            keyOverride: attackApiKey || null,
-            lane: 'background',
-          });
-          budget -= 1;
-          if (activeFactionId !== factionId || generation !== lifecycleGeneration || !isActiveView()) return { aborted: true };
-          if ((attackHistoryScope?.key || null) !== requestScopeKey) return { aborted: true };
-          const attacks = Array.isArray(data?.attacks) ? data.attacks : [];
-          mergeRecentAttacks(attacks);
-          if (attacks.length < ATTACKS_PAGE_LIMIT) return { aborted: false, older: null };
-          const minStarted = attacks.reduce((min, item) => {
-            const started = Number(item?.started);
-            return Number.isFinite(started) && started > 0 ? Math.min(min, started) : min;
-          }, Number.POSITIVE_INFINITY);
-          // `to` is inclusive, so the boundary attack repeats (deduplicated by id). No progress means the range is exhausted.
-          if (!Number.isFinite(minStarted) || (to !== null && minStarted >= to)) return { aborted: false, older: null };
-          return { aborted: false, older: minStarted };
-        };
+        const shouldAbort = () => activeFactionId !== factionId || generation !== lifecycleGeneration || !isActiveView()
+          || (attackHistoryScope?.key || null) !== requestScopeKey;
 
         // Phase 1: the head of the window (everything since the cursor). On the very first fetch this is the whole window.
         const headFrom = attackHistoryCursor > 0 ? Math.max(baseFrom, attackHistoryCursor - ATTACK_CURSOR_OVERLAP_SEC) : baseFrom;
-        let headTo = null;
-        let headComplete = false;
-        while (budget > 0) {
-          const page = await fetchPage(headFrom, headTo);
-          if (page.aborted) { aborted = true; return; }
-          if (page.older === null) { headComplete = true; break; }
-          headTo = page.older;
-        }
-        if (!headComplete && headTo !== null) {
-          // More history exists below headTo. Restart the backfill pointer from there; any overlap with an earlier
-          // partial backfill is harmless because every attack is deduplicated by id.
-          attackHistoryBackfillTo = headTo;
+        const head = await pageOutgoingAttacks({ from: headFrom, maxPages: budget, onPage: mergeRecentAttacks, shouldAbort });
+        budget -= head.pages;
+        if (head.aborted) { aborted = true; return; }
+        if (!head.complete && head.resumeTo !== null) {
+          // More history exists below. Restart the backfill pointer from there; any overlap with an earlier partial
+          // backfill is harmless because every attack is deduplicated by id.
+          attackHistoryBackfillTo = head.resumeTo;
           attackHistoryBackfillDone = false;
         } else if (attackHistoryBackfillTo === null) {
           attackHistoryBackfillDone = true;
         }
 
         // Phase 2: continue an unfinished backfill downwards to the scope start, within the remaining page budget.
-        while (attackHistoryBackfillTo !== null && budget > 0) {
-          const page = await fetchPage(baseFrom, attackHistoryBackfillTo);
-          if (page.aborted) { aborted = true; return; }
-          if (page.older === null || page.older >= attackHistoryBackfillTo) {
+        if (attackHistoryBackfillTo !== null && budget > 0) {
+          const fill = await pageOutgoingAttacks({ from: baseFrom, to: attackHistoryBackfillTo, maxPages: budget, onPage: mergeRecentAttacks, shouldAbort });
+          if (fill.aborted) { aborted = true; return; }
+          if (fill.complete) {
             attackHistoryBackfillTo = null;
             attackHistoryBackfillDone = true;
-            break;
+          } else {
+            attackHistoryBackfillTo = fill.resumeTo;
           }
-          attackHistoryBackfillTo = page.older;
         }
 
         incStat('attackHistoryRefreshes');
@@ -4399,23 +4431,19 @@
         renderAll();
       } catch (err) {
         if (activeFactionId !== factionId) return;
-        if (Number(err?.code) === 16 || Number(err?.code) === 7) {
+        const kind = apiErrorKind(err);
+        if (kind === 'unsupported' || kind === 'key') {
           attackHistoryFeatureState = 'unsupported';
           attackHistoryByUser.clear();
           console.warn(`[${SCRIPT}] Personal intel needs a Limited key or Custom user -> attacks key. Main overlay remains active.`, err);
           renderAll();
           return;
         }
-        if (err?.retryable || isApiBackoff(err)) {
-          console.warn(`[${SCRIPT}] Could not refresh recent attacks`, err);
-          if (!isApiBackoff(err) && !attackApiKey) registerApiFailure(err);
-          scheduleAttackRefresh(Math.max(5_000, globalBackoffUntil - Date.now() + 750));
-          return;
-        }
-        attackHistoryFeatureState = 'unsupported';
-        attackHistoryByUser.clear();
-        console.warn(`[${SCRIPT}] Personal intel disabled for this key.`, err);
-        renderAll();
+        // Backoff, a transient failure or one bad reply: keep what is cached and try again shortly (v0.33; before,
+        // any unexpected reply switched personal intel off until the page was reloaded).
+        if (kind !== 'backoff') console.warn(`[${SCRIPT}] Could not refresh recent attacks`, err);
+        if (kind === 'transient' && !attackApiKey) registerApiFailure(err);
+        scheduleAttackRefresh(Math.max(5_000, globalBackoffUntil - Date.now() + 750));
       }
     })().finally(() => {
       if (attackRefreshInFlight === flight) attackRefreshInFlight = null;
@@ -6723,37 +6751,17 @@
         // An unfinished first run resumes its walk into older fights; otherwise read what is new since the cursor.
         const backfilling = hitGoals.fillTo !== null && hitGoals.fillTo > windowStart;
         const from = backfilling ? windowStart : Math.max(windowStart, hitGoals.cursor);
-        let to = backfilling ? hitGoals.fillTo : null;
-        let complete = false;
-        for (let page = 0; page < HIT_PAGES_PER_REFRESH; page += 1) {
-          const data = await apiGet('/user/attacks', {
-            query: { filters: 'outgoing', sort: 'DESC', limit: ATTACKS_PAGE_LIMIT, from, ...(to !== null ? { to } : {}) },
-            cacheBust: true,
-            keyOverride: attackApiKey || null,
-            lane: 'background',
-          });
-          const attacks = Array.isArray(data?.attacks) ? data.attacks : [];
-          let oldest = Number.POSITIVE_INFINITY;
-          for (const raw of attacks) {
-            const id = String(raw?.id ?? raw?.code ?? '');
-            const started = Number(raw?.started);
-            if (!id || !Number.isFinite(started)) continue;
-            oldest = Math.min(oldest, started);
-            hitGoals.cursor = Math.max(hitGoals.cursor, started);
-            if (!hitGoals.seen[id]) hitGoals.seen[id] = [started, classifyAttackResult(raw?.result).kind === 'win' ? 1 : 0];
-          }
-          // Newest first; a short page or no progress means everything since `from` is in. `to` is inclusive.
-          if (attacks.length < ATTACKS_PAGE_LIMIT || !Number.isFinite(oldest) || (to !== null && oldest >= to)) { complete = true; break; }
-          to = oldest;
-        }
-        if (complete) { if (backfilling || hitGoals.fillTo === null) hitGoals.fillTo = null; }
-        else hitGoals.fillTo = to; // More than HIT_PAGES_PER_REFRESH pages: continue from here next time.
+        const walk = await pageOutgoingAttacks({ from, to: backfilling ? hitGoals.fillTo : null, maxPages: HIT_PAGES_PER_REFRESH });
+        for (const [started] of Object.values(hitGoals.seen)) hitGoals.cursor = Math.max(hitGoals.cursor, started);
+        if (walk.complete) { if (backfilling || hitGoals.fillTo === null) hitGoals.fillTo = null; }
+        else hitGoals.fillTo = walk.resumeTo; // More than HIT_PAGES_PER_REFRESH pages: continue from here next time.
         hitWonNow = Object.keys(hitGoals.seen).length;
         if (hitGoals.fillTo !== null) hitWonAt = Date.now() - HIT_REFRESH_MS + 20_000; // Finish the backfill soon.
         saveJson(GOALS_STORAGE, hitGoals);
       } catch (err) {
-        if (Number(err?.code) === 16 || Number(err?.code) === 7) hitUnsupported = true;
-        else if (!isApiBackoff(err)) console.warn(`[${SCRIPT}] Could not count your wins`, err);
+        const kind = apiErrorKind(err);
+        if (kind === 'unsupported') hitUnsupported = true;
+        else if (kind !== 'backoff') console.warn(`[${SCRIPT}] Could not count your wins`, err);
       } finally {
         renderAttackPanel();
       }
@@ -6914,7 +6922,7 @@
       setTimeout(() => refreshTreats({ force: true }), 4_000);
       setTimeout(() => refreshTreats({ force: true }), 15_000);
     }
-    if (huntState.enabled && result.kind === 'win') setTimeout(() => refreshHitCounts({ force: true }), 15_000);
+    if (huntState.enabled && result.kind === 'win') setTimeout(() => refreshHitCounts(), 20_000); // Skipped when the 4 s / 15 s reads covered it.
     renderAttackPanel();
     // The API record lags the page by a few seconds; ingest twice so the observed verdict lands before the next fight.
     setTimeout(() => ingestRecentAttacksOnAttackPage(), 4_000);
@@ -7410,16 +7418,19 @@
       const capable = await ensureAttackHistoryCapability();
       if (!capable) return;
       await refreshSelfStats(); // Own battle stats must be known before Fair Fight can be inverted into a score.
-      const data = await apiGet('/user/attacks', {
-        query: { filters: 'outgoing', sort: 'DESC', limit: 25, from: Math.max(0, Math.floor(serverNowSec()) - 6 * 3600) },
-        cacheBust: true,
-        keyOverride: attackApiKey || null,
-      });
       let recorded = 0;
-      for (const raw of Array.isArray(data?.attacks) ? data.attacks : []) {
-        const attack = normalizeAttack(raw);
-        if (attack && recordAttackIntel(attack)) recorded += 1;
-      }
+      await pageOutgoingAttacks({
+        from: Math.max(0, Math.floor(serverNowSec()) - 6 * 3600),
+        maxPages: 1,
+        limit: 25,
+        lane: 'normal',
+        onPage: attacks => {
+          for (const raw of attacks) {
+            const attack = normalizeAttack(raw);
+            if (attack && recordAttackIntel(attack)) recorded += 1;
+          }
+        },
+      });
       if (recorded > 0) flushOpponentIntel();
       renderAttackPanel();
     } catch (err) {

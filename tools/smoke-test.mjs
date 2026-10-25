@@ -242,6 +242,27 @@ if (!budgetUrls.some(url => url.includes('/user/123456/basic'))) { failed = true
 const budgetSends = JSON.parse(budget.storage.get('tornWarOverlay.apiSends') || '[]');
 if (!(budgetSends.length > 60 && budgetSends.length <= 85)) { failed = true; console.error(`Budget: shared window should record sends up to the live cap, saw ${budgetSends.length}`); }
 
+// Attack log: the attack-page intel read feeds the hit goals, so one request serves both and each fight counts once.
+const sharedUrls = [];
+const shared = await boot({
+  pathname: '/page.php',
+  search: '?sid=attack&user2ID=123456',
+  seed: {
+    'two.apiKey.v1': 'ABCDEFGHIJKLMNOP',
+    'two.attackApiKey.v1': 'LIMITEDKEYLIMITE',
+    'two.selfIntel.v1': JSON.stringify({ bss: 20000 }),
+    'two.hunt.v1': JSON.stringify({ enabled: true, dir: 'up', cursor: 1003, pool: {} }),
+    'two.goals.v1': JSON.stringify({ v: 2, day: 50, event: 400, seen: {}, cursor: nowSec - 600, fillTo: null }),
+  },
+  fetchImpl: (url, options) => { sharedUrls.push(String(url)); return huntFetch(url, options); },
+  waitMs: 2_500,
+});
+if (shared.errors.length > 0) { failed = true; console.error('SHARED LOG ERRORS:', shared.errors.join('\n')); }
+// The attack-page read (limit 25) covers everything since the goals cursor, so the goals reader skips its own request.
+const sharedReads = sharedUrls.filter(url => url.includes('/user/attacks'));
+if (sharedReads.length !== 1 || !sharedReads[0].includes('limit=25')) { failed = true; console.error('Attack log: the goals reader should reuse the attack-page read', sharedReads); }
+if (!/^🎯 Today [34]\/50/.test(shared.dock?.__goals?.textContent || '')) { failed = true; console.error('Attack log: a fight fetched by two readers must count once', shared.dock?.__goals?.textContent); }
+
 // Home page: with hunt mode on, a docked card offers the next pool target as one link to page.php.
 const homeNow = Math.floor(Date.now() / 1000);
 const home = await boot({
