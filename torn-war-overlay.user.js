@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.30.2
+// @version      0.31.0
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling, plus a hunt mode that scans for easy wins.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -36,19 +36,19 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const SCRIPT_VERSION = '0.30.2';
-  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0260__';
+  const SCRIPT_VERSION = '0.31.0';
+  const INSTANCE_KEY = '__TORN_WAR_OVERLAY__';
   if (window[INSTANCE_KEY]) {
-    console.warn(`[${SCRIPT}] v0.26.0 is already running; duplicate injection ignored.`);
+    console.warn(`[${SCRIPT}] v${window[INSTANCE_KEY]} is already running; duplicate injection of v${SCRIPT_VERSION} ignored.`);
     return;
   }
-  window[INSTANCE_KEY] = true;
+  window[INSTANCE_KEY] = SCRIPT_VERSION;
 
   // Everything below reads saved data synchronously, so the store is opened (and, in Torn PDA, loaded) first.
   const twoStorage = await openTwoStorage();
 
   const API_BASE = 'https://api.torn.com/v2';
-  const API_COMMENT = 'two-v0.26.0';
+  const API_COMMENT = `two-v${SCRIPT_VERSION}`; // Shown next to each call in the key owner's API log.
   const PDA_API_KEY = '###PDA-APIKEY###';
 
   const KEY_STORAGE = 'two.apiKey.v1';
@@ -262,6 +262,7 @@
     startedAt: Date.now(),
     apiAttempts: 0,
     apiErrors: 0,
+    apiThrottled: 0,
     factionSnapshots: 0,
     attackHistoryRefreshes: 0,
     profileFetches: 0,
@@ -822,6 +823,7 @@
       script: SCRIPT,
       version: SCRIPT_VERSION,
       storage: { backend: twoStorage.backend, quotaFull: twoStorage.quotaFull },
+      apiBudget: { lastMinute: apiSendsLastMinute(), lanes: API_LANE_LIMITS, throttledWaits: runtimeStats.apiThrottled },
       pdaTab: { supported: isPdaRuntime() && pdaTabStateSupported, state: pdaTabState },
       generatedAt: new Date().toISOString(),
       active: isActiveView(),
@@ -1005,7 +1007,54 @@
     return `${path}|${JSON.stringify(entries)}|${cacheBust ? 'fresh' : 'cached'}|${keyScope}`;
   }
 
-  async function apiGetRaw(path, { query = {}, cacheBust = false, keyOverride = null } = {}) {
+  // ---------------------------------------------------------------------------
+  // Request budget (v0.31): every request from every feature shares one sliding 60-second window, kept in plain
+  // localStorage so all open tabs on this device (Torn PDA's included) count together; Torn's limit of 100 a minute is
+  // per user, across all keys and tabs. Lanes reserve headroom: background work (hunt scanning, attack-log backfills,
+  // profile and strength workers) stops at 60, normal work at 75, live war data at 85, leaving room for other tools.
+  // A request over its lane's limit waits for the window to free a slot instead of failing.
+  // ---------------------------------------------------------------------------
+  const API_BUDGET_STORAGE = 'tornWarOverlay.apiSends'; // Not a two.* key: never moved into PDA_storage, shared by tabs.
+  const API_WINDOW_MS = 60_000;
+  const API_LANE_LIMITS = Object.freeze({ live: 85, normal: 75, background: 60 });
+  let apiSendsLocal = [];
+
+  function readApiSends(now = Date.now()) {
+    let list = apiSendsLocal;
+    try {
+      const parsed = JSON.parse(localStorage.getItem(API_BUDGET_STORAGE) || 'null');
+      if (Array.isArray(parsed)) list = parsed;
+    } catch { /* fall back to this tab's own record */ }
+    return list.map(Number).filter(t => Number.isFinite(t) && now - t < API_WINDOW_MS && t <= now + 5_000).sort((a, b) => a - b);
+  }
+
+  function writeApiSends(list) {
+    apiSendsLocal = list;
+    try { localStorage.setItem(API_BUDGET_STORAGE, JSON.stringify(list)); } catch { /* this tab still counts itself */ }
+  }
+
+  function apiSendsLastMinute() {
+    return readApiSends().length;
+  }
+
+  async function acquireApiSlot(lane = 'normal') {
+    const limit = API_LANE_LIMITS[lane] || API_LANE_LIMITS.normal;
+    for (;;) {
+      const now = Date.now();
+      const sends = readApiSends(now);
+      if (sends.length < limit) {
+        sends.push(now);
+        writeApiSends(sends);
+        return;
+      }
+      // The window frees enough room once the (length - limit + 1) oldest sends age out.
+      const waitMs = Math.max(250, sends[sends.length - limit] + API_WINDOW_MS - now + 50);
+      incStat('apiThrottled');
+      await sleep(Math.min(waitMs, 5_000));
+    }
+  }
+
+  async function apiGetRaw(path, { query = {}, cacheBust = false, keyOverride = null, lane = 'normal' } = {}) {
     incStat('apiAttempts');
     const requestKey = keyOverride || apiKey;
     if (apiPermanentlyDisabled && !keyOverride) throw new ApiError('API disabled after a permanent key error.');
@@ -1013,6 +1062,8 @@
     if (Date.now() < globalBackoffUntil) {
       throw new ApiError('API backoff active.', { retryable: true });
     }
+    await acquireApiSlot(lane);
+    if (Date.now() < globalBackoffUntil) throw new ApiError('API backoff active.', { retryable: true }); // Set while waiting.
 
     // Torn PDA has historically been most reliable with the key in the query string.
     // GM/fetch use Torn API v2's preferred Authorization header instead.
@@ -1103,11 +1154,11 @@
   }
 
   async function apiGet(path, options = {}) {
-    const { query = {}, cacheBust = false, keyOverride = null } = options;
+    const { query = {}, cacheBust = false, keyOverride = null, lane = 'normal' } = options;
     const key = apiFlightKey(path, query, cacheBust, keyOverride);
     if (apiFlights.has(key)) return apiFlights.get(key);
 
-    const flight = apiGetRaw(path, { query, cacheBust, keyOverride })
+    const flight = apiGetRaw(path, { query, cacheBust, keyOverride, lane })
       .finally(() => {
         if (apiFlights.get(key) === flight) apiFlights.delete(key);
       });
@@ -1758,7 +1809,7 @@
     if (Date.now() < globalBackoffUntil) return ownChain;
     ownChainLastFetchedAt = Date.now();
     try {
-      const data = await apiGet('/faction/chain', { cacheBust: true });
+      const data = await apiGet('/faction/chain', { cacheBust: true, lane: 'live' });
       const chain = data?.chain;
       const current = Number(chain?.current);
       ownChain = {
@@ -3821,7 +3872,7 @@
     if (!force && cachedSignedUp) return { signed_up: cachedSignedUp, id: userId };
     incStat('profileFetches');
 
-    const data = await apiGet(`/user/${userId}/profile`);
+    const data = await apiGet(`/user/${userId}/profile`, { lane: 'background' });
     const profile = data?.profile;
     if (!profile) throw new ApiError(`Profile ${userId} missing from API response.`);
 
@@ -4247,6 +4298,7 @@
             },
             cacheBust: true,
             keyOverride: attackApiKey || null,
+            lane: 'background',
           });
           budget -= 1;
           if (activeFactionId !== factionId || generation !== lifecycleGeneration || !isActiveView()) return { aborted: true };
@@ -4477,6 +4529,7 @@
     const data = await apiGet('/faction', {
       query: { selections: 'members,timestamp', id: factionId },
       cacheBust: true,
+      lane: 'live',
     });
     const after = monotonicNowMs();
     if (Number.isFinite(Number(data?.timestamp))) syncClockFromTimestamp(Number(data.timestamp), before, after);
@@ -4487,8 +4540,8 @@
   async function fetchFactionSnapshotStable(factionId) {
     const before = monotonicNowMs();
     const [membersData, timestampData] = await Promise.all([
-      apiGet(`/faction/${factionId}/members`, { cacheBust: true }),
-      apiGet('/faction/timestamp', { cacheBust: true }),
+      apiGet(`/faction/${factionId}/members`, { cacheBust: true, lane: 'live' }),
+      apiGet('/faction/timestamp', { cacheBust: true, lane: 'live' }),
     ]);
     const after = monotonicNowMs();
     if (Number.isFinite(Number(timestampData?.timestamp))) syncClockFromTimestamp(Number(timestampData.timestamp), before, after);
@@ -4639,6 +4692,7 @@
         const data = await apiGet('/user/search', {
           query: { filters, offset },
           cacheBust: true,
+          lane: 'background',
         });
         const results = Array.isArray(data?.search) ? data.search : [];
         total = Number(data?._metadata?.total);
@@ -6013,7 +6067,7 @@
 
   async function huntApiGet(path, options) {
     huntRequestTimes.push(Date.now());
-    return apiGet(path, options);
+    return apiGet(path, { ...options, lane: 'background' });
   }
 
   async function ensureHuntCursor() {
@@ -6630,6 +6684,7 @@
             query: { filters: 'outgoing', sort: 'DESC', limit: ATTACKS_PAGE_LIMIT, from, ...(to !== null ? { to } : {}) },
             cacheBust: true,
             keyOverride: attackApiKey || null,
+            lane: 'background',
           });
           const attacks = Array.isArray(data?.attacks) ? data.attacks : [];
           let oldest = Number.POSITIVE_INFINITY;
@@ -6648,7 +6703,7 @@
         if (complete) { if (backfilling || hitGoals.fillTo === null) hitGoals.fillTo = null; }
         else hitGoals.fillTo = to; // More than HIT_PAGES_PER_REFRESH pages: continue from here next time.
         hitWonNow = Object.keys(hitGoals.seen).length;
-        if (hitGoals.fillTo !== null) hitWonAt = Date.now() - HIT_REFRESH_MS + 5_000; // Finish the backfill soon.
+        if (hitGoals.fillTo !== null) hitWonAt = Date.now() - HIT_REFRESH_MS + 20_000; // Finish the backfill soon.
         saveJson(GOALS_STORAGE, hitGoals);
       } catch (err) {
         if (Number(err?.code) === 16 || Number(err?.code) === 7) hitUnsupported = true;
@@ -6783,7 +6838,7 @@
     const session = huntSession();
     const lines = [
       `Hunt: ${ready} targets confirmed free in the last ${HUNT_FRESH_SEC / 60} min (goal ${goal}: ${ownBars ? `twice your ${Math.floor(ownBars.energyCurrent / ENERGY_PER_ATTACK)} hits, between ${HUNT_MIN_AVAILABLE} and ${HUNT_MAX_AVAILABLE}` : `the minimum, because your energy is unknown`}). ${formatCount(poolSize)} saved.`,
-      `Scanner: ${huntLastNote || 'idle'} · ${huntRatePerMinute()} requests/min · next ID #${huntState.cursor ? formatCount(huntState.cursor) : '?'} · ${formatCount(huntState.scanned)} IDs checked.`,
+      `Scanner: ${huntLastNote || 'idle'} · ${huntRatePerMinute()} hunt / ${apiSendsLastMinute()} total requests/min (cap 85) · next ID #${huntState.cursor ? formatCount(huntState.cursor) : '?'} · ${formatCount(huntState.scanned)} IDs checked.`,
       `Today: ${session.w} win${session.w === 1 ? '' : 's'}, ${session.l} loss${session.l === 1 ? '' : 'es'}.`,
       ...(huntTreats ? [huntTreatsLine(session)] : []),
       ownBars ? `Energy ${ownBars.energyCurrent}/${ownBars.energyMax}.` : `Energy unavailable${ownBarsError ? `: ${ownBarsError}` : ' (not read yet)'}.`,
@@ -6861,13 +6916,13 @@
     try {
       let factionId = recentProfileByUser.get(attackTargetId)?.factionId || null;
       if (!factionId) {
-        const data = await apiGet(`/user/${attackTargetId}/profile`);
+        const data = await apiGet(`/user/${attackTargetId}/profile`, { lane: 'live' });
         if (data?.profile) rememberProfileFacts(attackTargetId, data.profile);
         factionId = recentProfileByUser.get(attackTargetId)?.factionId || null;
       }
       if (!factionId) { attackNextTarget = { none: true, reason: 'target has no faction' }; return; }
       const before = monotonicNowMs();
-      const data = await apiGet(`/faction/${factionId}/members`, { cacheBust: true });
+      const data = await apiGet(`/faction/${factionId}/members`, { cacheBust: true, lane: 'live' });
       const ids = ingestMembersSnapshot(data?.members);
       lastFreshSnapshotAt = Date.now();
       lastFreshSnapshotPerfAt = before;
@@ -7031,7 +7086,7 @@
     const flight = (async () => {
       try {
         const before = monotonicNowMs();
-        const data = await apiGet(`/user/${attackTargetId}/basic`, { cacheBust: true });
+        const data = await apiGet(`/user/${attackTargetId}/basic`, { cacheBust: true, lane: 'live' });
         const profile = data?.profile;
         if (!profile) throw new ApiError('Target profile missing from API response.');
         attackTargetProfile = {

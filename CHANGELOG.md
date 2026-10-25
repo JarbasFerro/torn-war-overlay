@@ -4,6 +4,15 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.31.0 - One request budget for the whole script
+
+- Every Torn API request now goes through one shared budget: a sliding 60-second window counted across all features and all open tabs on the device (Torn PDA's tabs included). Before, each feature paced itself, and in the worst case (a first attack-history backfill on the faction page, or hunt scanning plus a faction tab) the total could pass Torn's limit of 100 requests a minute per user, which gets the key throttled and stops everything at once.
+- Lanes keep live war data first: background work (hunt scanning, attack-log backfills, the profile, young-account and hit-goal workers) pauses at 60 requests in the last minute, normal work at 75, and live data (faction roster polling, the attack target's status, the chain, the next target) at 85, leaving room for Torn PDA and other tools. A request over its lane waits for a free slot instead of failing.
+- The hunt details show hunt requests and the shared total (`… hunt / … total requests/min (cap 85)`), and the diagnostics snapshot reports the budget and how often a request had to wait.
+- The hit-goal backfill takes a page batch every 20 seconds instead of every 5.
+- The API `comment` and the duplicate-load guard now carry the real version (they still said v0.26.0).
+- README: the Torn API ToS table now discloses the second (Limited) key, where each key travels (header in browsers, URL in Torn PDA), the request comment, the stored attack ids for hit goals and the request budget.
+
 ## 0.30.2 - Basket shortcut removed
 
 - The `Basket ▸` button is gone from the hunt dock and the home card, together with the items-page code behind it: it did not reliably reach the basket. The script no longer runs on `item.php`. Basket progress stays.

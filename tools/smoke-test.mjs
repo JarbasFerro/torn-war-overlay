@@ -219,6 +219,29 @@ if (!/706 more to Petrifying/.test(dock?.__basket?.text?.title || '')) { failed 
 if (huntSaved.session?.t0 !== 1234) { failed = true; console.error('Hunt mode: treat baseline not saved in the session', huntSaved.session); }
 if (dock?.__energy?.textContent !== '⚡4') { failed = true; console.error('Hunt mode: energy should be read with the Limited key (100 energy = 4 hits)', dock?.__energy?.textContent, dock?.__energy?.title); }
 
+// Request budget: 60 sends in the last minute (from any tab) fill the background lane, so hunt scanning waits,
+// while the live status check of the attack target still goes out.
+const budgetUrls = [];
+const budgetNow = Date.now();
+const budget = await boot({
+  pathname: '/page.php',
+  search: '?sid=attack&user2ID=123456',
+  seed: {
+    'two.apiKey.v1': 'ABCDEFGHIJKLMNOP',
+    'two.attackApiKey.v1': 'LIMITEDKEYLIMITE',
+    'two.selfIntel.v1': JSON.stringify({ bss: 20000 }),
+    'two.hunt.v1': JSON.stringify({ enabled: true, dir: 'up', cursor: 1003, pool: {} }),
+    'tornWarOverlay.apiSends': JSON.stringify(Array.from({ length: 60 }, (_, i) => budgetNow - 1_000 - i * 10)),
+  },
+  fetchImpl: (url, options) => { budgetUrls.push(String(url)); return huntFetch(url, options); },
+  waitMs: 3_000,
+});
+if (budget.errors.length > 0) { failed = true; console.error('BUDGET ERRORS:', budget.errors.join('\n')); }
+if (budgetUrls.some(url => /\/user\/100\d\/profile/.test(url))) { failed = true; console.error('Budget: hunt scanning should wait while the background lane is full'); }
+if (!budgetUrls.some(url => url.includes('/user/123456/basic'))) { failed = true; console.error('Budget: the live status check should still be sent'); }
+const budgetSends = JSON.parse(budget.storage.get('tornWarOverlay.apiSends') || '[]');
+if (!(budgetSends.length > 60 && budgetSends.length <= 85)) { failed = true; console.error(`Budget: shared window should record sends up to the live cap, saw ${budgetSends.length}`); }
+
 // Home page: with hunt mode on, a docked card offers the next pool target as one link to page.php.
 const homeNow = Math.floor(Date.now() / 1000);
 const home = await boot({
