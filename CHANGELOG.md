@@ -4,6 +4,12 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.32.0 - One error policy and one refresh helper
+
+- Fix: your faction's chain (attack page) and ranked-war context (hunt guard) switched themselves off until the page was reloaded after a single bad reply, such as a temporary "Incorrect ID". Only an access-level error (codes 7 and 16: this key cannot read it) now turns a feature off for the session; any other failure is logged and retried at the next refresh.
+- One error policy: every API error now gets exactly one meaning: not sent because of the shared backoff, not available with this key, key rejected, worth retrying, or a bad reply. This replaces 28 separate text comparisons and several ad-hoc checks, and the rule is covered by built-in self-tests.
+- One refresh helper: chain, energy, Halloween treats and your faction's ranked war now share one implementation of "refresh at most every N seconds". It handles duplicate calls, the shared backoff, pausing, and switching off only when the key cannot read the data. The four functions lost about a third of their code and every one of their bookkeeping variables. Behaviour is otherwise unchanged; the treat counter still pauses for 30 minutes when no Halloween competition is running.
+
 ## 0.31.0 - One request budget for the whole script
 
 - Every Torn API request now goes through one shared budget: a sliding 60-second window counted across all features and all open tabs on the device (Torn PDA's tabs included). Before, each feature paced itself, and in the worst case (a first attack-history backfill on the faction page, or hunt scanning plus a faction tab) the total could pass Torn's limit of 100 requests a minute per user, which gets the key throttled and stops everything at once.

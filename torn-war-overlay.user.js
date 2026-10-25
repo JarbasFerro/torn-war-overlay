@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.31.0
+// @version      0.32.0
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling, plus a hunt mode that scans for easy wins.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -36,7 +36,7 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const SCRIPT_VERSION = '0.31.0';
+  const SCRIPT_VERSION = '0.32.0';
   const INSTANCE_KEY = '__TORN_WAR_OVERLAY__';
   if (window[INSTANCE_KEY]) {
     console.warn(`[${SCRIPT}] v${window[INSTANCE_KEY]} is already running; duplicate injection of v${SCRIPT_VERSION} ignored.`);
@@ -236,9 +236,7 @@
   let attackHistoryCursor = 0; // Highest attack `started` timestamp merged for the current scope.
   let attackHistoryBackfillTo = null; // Oldest `started` reached while paging backwards; null when nothing older remains.
   let attackHistoryBackfillDone = false;
-  let ownChain = null; // { current, timeout, cooldown, fetchedAtPerf }
-  let ownChainLastFetchedAt = 0;
-  let ownChainUnsupported = false;
+  let ownChain = null; // { current, timeout, cooldown, fetchedAtPerf }; mirrors ownChainResource.value
   let ownProxyLastFetchedAt = 0;
   let ownProxyInFlight = null;
   let strengthUnsupported = false;
@@ -327,13 +325,20 @@
   let settings = null;
 
   class ApiError extends Error {
-    constructor(message, { code = null, status = null, retryable = false } = {}) {
+    constructor(message, { code = null, status = null, retryable = false, backoff = false } = {}) {
       super(message);
       this.name = 'ApiError';
       this.code = code;
       this.status = status;
       this.retryable = retryable;
+      this.backoff = backoff; // Not sent: the shared backoff after an earlier failure is still running.
     }
+  }
+
+  const API_BACKOFF_MESSAGE = 'API backoff active.';
+
+  function isApiBackoff(err) {
+    return err?.backoff === true || err?.message === API_BACKOFF_MESSAGE;
   }
 
   // ---------------------------------------------------------------------------
@@ -947,6 +952,53 @@
     return { retryable: false, backoffMs: 0 };
   }
 
+  // One meaning per error (v0.32): 'backoff' (not sent), 'unsupported' (this key's access level cannot read it: codes 7
+  // and 16, the only reason to switch a feature off for the session), 'key' (the key itself is rejected), 'transient'
+  // (worth retrying later) or 'failed' (this reply was bad; the next refresh tries again).
+  function apiErrorKind(err) {
+    if (isApiBackoff(err)) return 'backoff';
+    const code = Number(err?.code);
+    if (code === 7 || code === 16) return 'unsupported';
+    if (classifyApiError(err?.code, err?.status, err?.message).permanentKeyError) return 'key';
+    return err?.retryable ? 'transient' : 'failed';
+  }
+
+  // Polled resource (v0.32): one shape for "refresh this value at most every ttlMs". It dedupes concurrent calls, waits
+  // out the shared backoff, can pause itself (pauseFor), and turns off for the session only on 'unsupported'.
+  // load(res) returns the new value; onError(err, kind, res) replaces the default warning; after(res) always runs.
+  function createResource(name, { ttlMs, gate = () => true, load, onError = null, after = null }) {
+    const res = { name, value: null, error: '', unsupported: false, lastAt: 0, offUntil: 0, inFlight: null };
+    res.pauseFor = ms => { res.offUntil = Date.now() + ms; };
+    res.refresh = ({ force = false } = {}) => {
+      if (!apiKey || apiPermanentlyDisabled || res.unsupported || !gate()) return Promise.resolve(res.value);
+      if (res.inFlight) return res.inFlight;
+      const now = Date.now();
+      if (now < res.offUntil || now < globalBackoffUntil) return Promise.resolve(res.value);
+      if (!force && now - res.lastAt < ttlMs - 1_000) return Promise.resolve(res.value);
+      res.lastAt = now;
+      const flight = (async () => {
+        try {
+          res.value = await load(res);
+          res.error = '';
+        } catch (err) {
+          const kind = apiErrorKind(err);
+          if (kind !== 'backoff') {
+            if (kind === 'unsupported') { res.unsupported = true; res.value = null; }
+            res.error = err?.message || 'request failed';
+            if (onError) onError(err, kind, res);
+            else console.warn(`[${SCRIPT}] Could not refresh ${name}${kind === 'unsupported' ? ' (not available with this key)' : ''}`, err);
+          }
+        } finally {
+          if (after) after(res);
+        }
+        return res.value;
+      })().finally(() => { if (res.inFlight === flight) res.inFlight = null; });
+      res.inFlight = flight;
+      return flight;
+    };
+    return res;
+  }
+
   function registerApiFailure(err) {
     incStat('apiErrors');
     consecutiveApiFailures += 1;
@@ -1060,10 +1112,10 @@
     if (apiPermanentlyDisabled && !keyOverride) throw new ApiError('API disabled after a permanent key error.');
     if (!requestKey) throw new ApiError('No Torn API key available.');
     if (Date.now() < globalBackoffUntil) {
-      throw new ApiError('API backoff active.', { retryable: true });
+      throw new ApiError(API_BACKOFF_MESSAGE, { retryable: true, backoff: true });
     }
     await acquireApiSlot(lane);
-    if (Date.now() < globalBackoffUntil) throw new ApiError('API backoff active.', { retryable: true }); // Set while waiting.
+    if (Date.now() < globalBackoffUntil) throw new ApiError(API_BACKOFF_MESSAGE, { retryable: true, backoff: true }); // Set while waiting.
 
     // Torn PDA has historically been most reliable with the key in the query string.
     // GM/fetch use Torn API v2's preferred Authorization header instead.
@@ -1790,7 +1842,7 @@
         incStat('selfStatsRefreshes');
         return bss;
       } catch (err) {
-        if (err?.message !== 'API backoff active.') {
+        if (!isApiBackoff(err)) {
           console.warn(`[${SCRIPT}] Could not refresh own battle stats; Fair Fight memory will use observed values only.`, err);
         }
         return getOwnBss();
@@ -1803,33 +1855,28 @@
     return flight;
   }
 
-  async function refreshOwnChain({ force = false } = {}) {
-    if (!intelEnabled() || !apiKey || apiPermanentlyDisabled || ownChainUnsupported) return ownChain;
-    if (!force && Date.now() - ownChainLastFetchedAt < CHAIN_REFRESH_MS - 1_000) return ownChain;
-    if (Date.now() < globalBackoffUntil) return ownChain;
-    ownChainLastFetchedAt = Date.now();
-    try {
+  const ownChainResource = createResource('own chain', {
+    ttlMs: CHAIN_REFRESH_MS,
+    gate: () => intelEnabled(),
+    load: async () => {
       const data = await apiGet('/faction/chain', { cacheBust: true, lane: 'live' });
       const chain = data?.chain;
       const current = Number(chain?.current);
-      ownChain = {
+      incStat('chainRefreshes');
+      return {
         current: Number.isFinite(current) && current > 0 ? current : 0,
         timeout: Math.max(0, Number(chain?.timeout) || 0),
         cooldown: Math.max(0, Number(chain?.cooldown) || 0),
         max: Math.max(0, Number(chain?.max) || 0),
         fetchedAtPerf: monotonicNowMs(),
       };
-      incStat('chainRefreshes');
-    } catch (err) {
-      if (Number(err?.code) === 7 || Number(err?.code) === 16 || (err && !err.retryable && err.message !== 'API backoff active.')) {
-        ownChainUnsupported = true;
-        ownChain = null;
-        console.warn(`[${SCRIPT}] Own chain unavailable for this key; chain scale defaults to 1.0.`, err);
-      } else if (err?.message !== 'API backoff active.') {
-        console.warn(`[${SCRIPT}] Could not refresh own chain; chain scale defaults to 1.0.`, err);
-      }
-    }
-    return ownChain;
+    },
+    onError: (err, kind) => console.warn(`[${SCRIPT}] ${kind === 'unsupported' ? 'Own chain unavailable for this key' : 'Could not refresh own chain'}; chain scale defaults to 1.0.`, err),
+    after: res => { ownChain = res.value; },
+  });
+
+  function refreshOwnChain(options) {
+    return ownChainResource.refresh(options);
   }
 
   function getChainSnapshot() {
@@ -2162,7 +2209,7 @@
           proxy.level = Number.isFinite(Number(profile?.profile?.level)) ? Number(profile.profile.level) : null;
           proxy.lastAction = Number.isFinite(Number(profile?.profile?.last_action?.timestamp)) ? Number(profile.profile.last_action.timestamp) : null;
         } catch (err) {
-          if (err?.message !== 'API backoff active.') console.warn(`[${SCRIPT}] Could not read own profile age; the strength model uses activity time instead.`, err);
+          if (!isApiBackoff(err)) console.warn(`[${SCRIPT}] Could not read own profile age; the strength model uses activity time instead.`, err);
         }
         selfIntel.proxy = { ...proxy, ageDays, updatedAt: Date.now() };
         saveJson(SELF_INTEL_STORAGE, selfIntel);
@@ -2175,7 +2222,7 @@
           strengthUnsupported = true;
           clearStrengthQueue();
         }
-        if (err?.message !== 'API backoff active.') {
+        if (!isApiBackoff(err)) {
           registerApiFailure(err);
           console.warn(`[${SCRIPT}] Could not read own public stats; match verdicts need them for comparison.`, err);
         }
@@ -2303,7 +2350,7 @@
       }
     } catch (err) {
       // A transient failure is retried by the worker (one repeated personalstats call); only a permanent one is stored.
-      if (err?.retryable || err?.message === 'API backoff active.') throw err;
+      if (err?.retryable || isApiBackoff(err)) throw err;
       console.warn(`[${SCRIPT}] Could not fetch profile for rank band of ${userId}`, err);
     }
     storeStrengthProxy(userId, proxy);
@@ -2342,7 +2389,7 @@
               return;
             }
             console.warn(`[${SCRIPT}] Could not fetch public stats for ${userId}`, err);
-            if (err?.message !== 'API backoff active.') registerApiFailure(err);
+            if (!isApiBackoff(err)) registerApiFailure(err);
             if (err?.retryable && !apiPermanentlyDisabled) {
               if (rowsByUser.has(userId) && !strengthQueuedIds.has(userId)) {
                 strengthQueuedIds.add(userId);
@@ -3948,7 +3995,7 @@
           .then(() => registerApiSuccess())
           .catch(err => {
             console.warn(`[${SCRIPT}] Could not fetch profile ${next.userId}`, err);
-            if (err?.message !== 'API backoff active.') registerApiFailure(err);
+            if (!isApiBackoff(err)) registerApiFailure(err);
             if (err?.retryable && !apiPermanentlyDisabled) {
               const retryDelay = Math.max(1_000, globalBackoffUntil - Date.now() + 250);
               setTimeout(() => queueProfile(next.userId, next.kind), retryDelay);
@@ -3976,7 +4023,7 @@
       registerApiSuccess();
     } catch (err) {
       console.warn(`[${SCRIPT}] Could not resolve enemy faction`, err);
-      if (err?.message !== 'API backoff active.') registerApiFailure(err);
+      if (!isApiBackoff(err)) registerApiFailure(err);
     } finally {
       resolvingFaction = false;
     }
@@ -4149,7 +4196,7 @@
           warfareRankedFallbackNeeded = false;
         } catch (err) {
           if (activeFactionId !== factionId) return null;
-          if (err?.message === 'API backoff active.') throw err;
+          if (isApiBackoff(err)) throw err;
           warfareRankedFallbackNeeded = true;
           console.warn(`[${SCRIPT}] /faction/wars unavailable; trying the warfare list.`, err);
         }
@@ -4176,14 +4223,14 @@
       } catch (err) {
         if (activeFactionId !== factionId) return null;
         warContextLastCheckedAt = Date.now();
-        if (currentWar && (err?.retryable || err?.message === 'API backoff active.')) {
+        if (currentWar && (err?.retryable || isApiBackoff(err))) {
           // A transient failure must not flip the scope: that would wipe the dots and restart the backfill for nothing.
           return currentWar;
         }
         warContextState = 'fallback';
         currentWar = null;
         setAttackHistoryScope(makeFallbackAttackScope(factionId));
-        if (err?.message !== 'API backoff active.') console.warn(`[${SCRIPT}] Ranked-war context unavailable; using a time-scoped attack-history fallback.`, err);
+        if (!isApiBackoff(err)) console.warn(`[${SCRIPT}] Ranked-war context unavailable; using a time-scoped attack-history fallback.`, err);
         return null;
       }
     })().finally(() => {
@@ -4359,9 +4406,9 @@
           renderAll();
           return;
         }
-        if (err?.retryable || err?.message === 'API backoff active.') {
+        if (err?.retryable || isApiBackoff(err)) {
           console.warn(`[${SCRIPT}] Could not refresh recent attacks`, err);
-          if (err?.message !== 'API backoff active.' && !attackApiKey) registerApiFailure(err);
+          if (!isApiBackoff(err) && !attackApiKey) registerApiFailure(err);
           scheduleAttackRefresh(Math.max(5_000, globalBackoffUntil - Date.now() + 750));
           return;
         }
@@ -4641,7 +4688,7 @@
         }
       } catch (err) {
         console.warn(`[${SCRIPT}] Could not refresh faction members`, err);
-        if (err?.message !== 'API backoff active.') registerApiFailure(err);
+        if (!isApiBackoff(err)) registerApiFailure(err);
       }
     })().finally(() => {
       if (factionRefreshInFlight === flight) factionRefreshInFlight = null;
@@ -4738,7 +4785,7 @@
     } catch (err) {
       if (activeFactionId !== factionId || generation !== ageSearchGeneration) return;
 
-      const backoffOnly = err?.message === 'API backoff active.';
+      const backoffOnly = isApiBackoff(err);
       if (!backoffOnly) registerApiFailure(err);
 
       // Do not abandon the low-API search path because of a transient rate/server/network condition.
@@ -5426,6 +5473,12 @@
       if (baseRespectForLevel(1) !== 1 || baseRespectForLevel(100) !== 1.5 || baseRespectForLevel(60) !== 1.3) faults.push('base respect formula');
       if (chainScaleForHit(10) !== 1 || Math.abs(chainScaleForHit(100) - 1.25) > 1e-9 || Math.abs(chainScaleForHit(1000) - 1.5) > 1e-9) faults.push('chain scale formula');
       if (!isChainBonusHit(250) || isChainBonusHit(251)) faults.push('chain bonus table');
+      // Only an access-level error (7, 16) may switch a feature off for the session; a bad reply (e.g. code 6) must not.
+      if (apiErrorKind(new ApiError('x', { code: 16 })) !== 'unsupported' || apiErrorKind(new ApiError('x', { code: 7 })) !== 'unsupported') faults.push('error kind: unsupported');
+      if (apiErrorKind(new ApiError('x', { code: 6 })) !== 'failed') faults.push('error kind: code 6 is a failed reply');
+      if (apiErrorKind(new ApiError('x', { code: 9, retryable: true })) !== 'transient') faults.push('error kind: transient');
+      if (apiErrorKind(new ApiError(API_BACKOFF_MESSAGE, { retryable: true, backoff: true })) !== 'backoff' || !isApiBackoff({ message: API_BACKOFF_MESSAGE })) faults.push('error kind: backoff');
+      if (apiErrorKind(new ApiError('x', { code: 2 })) !== 'key') faults.push('error kind: rejected key');
       if (battleStatScore(100, 100, 100, 100) !== 40) faults.push('battle stat score');
       if (fairFightFromScores(30, 40) !== 3 || Math.abs(fairFightFromScores(15, 40) - 2) > 1e-9) faults.push('fair fight formula');
       if (Math.abs(defenderScoreFromFairFight(2, 40) - 15) > 1e-9) faults.push('fair fight inversion');
@@ -5654,9 +5707,7 @@
   let attackLogAttachedAt = 0;
   let attackLogScanTimer = null;
   const attackLogSeenLines = new Set();
-  let ownBars = null; // { energyCurrent, energyMax, fullTime, fetchedAt }
-  let ownBarsLastAt = 0;
-  let ownBarsUnsupported = false;
+  let ownBars = null; // { energyCurrent, energyMax, fullTime, fetchedAt }; mirrors ownBarsResource.value
   let ownBarsError = ''; // Why energy is missing, shown in the hunt dock instead of silently hiding it.
   const ATTACK_LOG_SELECTOR = 'ul[aria-describedby="log-header"]';
   const OWN_BARS_REFRESH_MS = 60_000;
@@ -5798,15 +5849,10 @@
   const TREATS_REFRESH_MS = 5 * 60_000;
   const TREATS_RETRY_MS = 30 * 60_000;
   let huntTreats = null; // { total, basket, fetchedAt, fightBase } | null; fightBase is the total before the last fight
-  let huntTreatsLastAt = 0;
-  let huntTreatsOffUntil = 0;
-  let huntTreatsInFlight = null;
 
   // Own ranked war for the hunt guard (v0.27): hunt hits score nothing for a war, so the dock says when one is running.
   const OWN_WAR_REFRESH_MS = 5 * 60_000;
-  let ownWar = null; // normalizeRankedWar() result for the key owner's faction | null
-  let ownWarLastAt = 0;
-  let ownWarUnsupported = false;
+  let ownWar = null; // normalizeRankedWar() result for the key owner's faction | null; mirrors ownWarResource.value
 
   function loadHuntState() {
     const raw = loadObjectJson(HUNT_STORAGE, {});
@@ -6104,7 +6150,7 @@
       profile = (await huntApiGet(`/user/${id}/profile`))?.profile;
     } catch (err) {
       if (Number(err?.code) === 6) { huntState.scanned += 1; huntScanMissed(); return 1; } // No such user.
-      if (err?.retryable || err?.message === 'API backoff active.') huntState.cursor = id; // Retry this ID after the backoff.
+      if (err?.retryable || isApiBackoff(err)) huntState.cursor = id; // Retry this ID after the backoff.
       throw err;
     }
     huntState.scanned += 1;
@@ -6179,7 +6225,7 @@
           if (!huntNext && job.kind === 'refresh') huntPickNext();
         } catch (err) {
           nextAllowedAt = started + HUNT_REQUEST_GAP_MS;
-          if (err?.message !== 'API backoff active.') {
+          if (!isApiBackoff(err)) {
             registerApiFailure(err);
             console.warn(`[${SCRIPT}] Hunt ${job.kind} failed`, err);
           }
@@ -6222,7 +6268,7 @@
         break;
       }
     } catch (err) {
-      if (err?.message !== 'API backoff active.') console.warn(`[${SCRIPT}] Could not pick a hunt target`, err);
+      if (!isApiBackoff(err)) console.warn(`[${SCRIPT}] Could not pick a hunt target`, err);
     } finally {
       huntPicking = false;
       if (!huntNext && huntState.enabled && huntConfirmedCount() === 0) toastOnce('hunt-empty', 'Hunt: no free target right now; scanning for more', 'info', 30 * 60_000);
@@ -6707,7 +6753,7 @@
         saveJson(GOALS_STORAGE, hitGoals);
       } catch (err) {
         if (Number(err?.code) === 16 || Number(err?.code) === 7) hitUnsupported = true;
-        else if (err?.message !== 'API backoff active.') console.warn(`[${SCRIPT}] Could not count your wins`, err);
+        else if (!isApiBackoff(err)) console.warn(`[${SCRIPT}] Could not count your wins`, err);
       } finally {
         renderAttackPanel();
       }
@@ -6938,108 +6984,94 @@
       }
     } catch (err) {
       attackNextTarget = { none: true, reason: 'could not read the enemy roster' };
-      if (err?.message !== 'API backoff active.') console.warn(`[${SCRIPT}] Could not pick the next target`, err);
+      if (!isApiBackoff(err)) console.warn(`[${SCRIPT}] Could not pick the next target`, err);
     } finally {
       attackNextLoading = false;
       renderAttackPanel();
     }
   }
 
-  async function refreshOwnBars() {
-    if (!apiKey || apiPermanentlyDisabled || ownBarsUnsupported) return ownBars;
-    if (Date.now() - ownBarsLastAt < OWN_BARS_REFRESH_MS - 1_000) return ownBars;
-    if (Date.now() < globalBackoffUntil) return ownBars;
-    ownBarsLastAt = Date.now();
-    try {
-      // The battle-stats key (Limited) can read bars when the main key cannot, e.g. a Public Torn PDA key.
+  // The battle-stats key (Limited) can read bars when the main key cannot, e.g. a Public Torn PDA key.
+  const ownBarsResource = createResource('own energy', {
+    ttlMs: OWN_BARS_REFRESH_MS,
+    load: async res => {
       const data = await apiGet('/user/bars', { cacheBust: true, keyOverride: attackApiKey || null });
       const energy = data?.bars?.energy;
-      if (energy) {
-        ownBars = {
-          energyCurrent: Math.max(0, Number(energy.current) || 0),
-          energyMax: Math.max(0, Number(energy.maximum) || 0),
-          fullTime: Math.max(0, Number(energy.full_time ?? energy.fulltime) || 0),
-          fetchedAt: Date.now(),
-        };
-        ownBarsError = '';
-      } else {
-        ownBarsError = 'the API reply had no energy bar';
-      }
-    } catch (err) {
-      if (Number(err?.code) === 16 || Number(err?.code) === 7) {
-        ownBarsUnsupported = true;
+      if (!energy) { ownBarsError = 'the API reply had no energy bar'; return res.value; }
+      ownBarsError = '';
+      return {
+        energyCurrent: Math.max(0, Number(energy.current) || 0),
+        energyMax: Math.max(0, Number(energy.maximum) || 0),
+        fullTime: Math.max(0, Number(energy.full_time ?? energy.fulltime) || 0),
+        fetchedAt: Date.now(),
+      };
+    },
+    onError: (err, kind) => {
+      if (kind === 'unsupported') {
         ownBarsError = attackApiKey
           ? 'neither of your API keys can read your bars (it needs Minimal or Limited access)'
           : 'your API key cannot read your bars; set a Limited attack-history key in Tools';
         toastOnce('energy-key', `Torn War Overlay: ${ownBarsError}`, 'warn', 24 * 60 * 60_000);
-      } else if (err?.message !== 'API backoff active.') {
+      } else {
         ownBarsError = err?.message || 'request failed';
         console.warn(`[${SCRIPT}] Could not read own energy`, err);
       }
-    }
-    return ownBars;
+    },
+    after: res => { ownBars = res.value; },
+  });
+
+  function refreshOwnBars(options) {
+    return ownBarsResource.refresh(options);
   }
 
-  async function refreshTreats({ force = false } = {}) {
-    if (!apiKey || apiPermanentlyDisabled || !huntState.enabled) return huntTreats;
-    if (huntTreatsInFlight) return huntTreatsInFlight;
-    const now = Date.now();
-    if (now < huntTreatsOffUntil || now < globalBackoffUntil) return huntTreats;
-    if (!force && now - huntTreatsLastAt < TREATS_REFRESH_MS - 1_000) return huntTreats;
-    huntTreatsLastAt = now;
-    const flight = (async () => {
-      try {
-        const data = await apiGet('/user/competition', { cacheBust: true });
-        const competition = data?.competition;
-        const total = Number(competition?.treats_collected);
-        if (String(competition?.name || '').toLowerCase() !== 'halloween' || !Number.isFinite(total) || total < 0) {
-          huntTreats = null;
-          huntTreatsOffUntil = Date.now() + TREATS_RETRY_MS;
-          return null;
-        }
-        huntTreats = {
-          total,
-          basket: typeof competition?.basket?.name === 'string' ? competition.basket.name : '',
-          fetchedAt: Date.now(),
-          fightBase: huntTreats?.fightBase ?? null,
-        };
-        const session = huntSession();
-        if (session.t0 === null) { session.t0 = total; session.ta = 0; saveHuntState(); }
-      } catch (err) {
-        if (err?.message === 'API backoff active.' || err?.retryable) return huntTreats;
-        huntTreats = null;
-        huntTreatsOffUntil = Date.now() + TREATS_RETRY_MS; // Usually NoCompetitionAvailable: the event is not running.
-      } finally {
-        renderAttackPanel();
+  // No Halloween competition (NoCompetitionAvailable) or a bad reply pauses the counter for 30 minutes, not the session.
+  const treatsResource = createResource('Halloween treats', {
+    ttlMs: TREATS_REFRESH_MS,
+    gate: () => huntState.enabled,
+    load: async res => {
+      const data = await apiGet('/user/competition', { cacheBust: true });
+      const competition = data?.competition;
+      const total = Number(competition?.treats_collected);
+      if (String(competition?.name || '').toLowerCase() !== 'halloween' || !Number.isFinite(total) || total < 0) {
+        res.pauseFor(TREATS_RETRY_MS);
+        return null;
       }
-      return huntTreats;
-    })().finally(() => {
-      if (huntTreatsInFlight === flight) huntTreatsInFlight = null;
-    });
-    huntTreatsInFlight = flight;
-    return flight;
+      const session = huntSession();
+      if (session.t0 === null) { session.t0 = total; session.ta = 0; saveHuntState(); }
+      return {
+        total,
+        basket: typeof competition?.basket?.name === 'string' ? competition.basket.name : '',
+        fetchedAt: Date.now(),
+        fightBase: huntTreats?.fightBase ?? null,
+      };
+    },
+    onError: (err, kind, res) => {
+      if (kind === 'transient') return; // Keep the last count; the next refresh retries.
+      res.value = null;
+      res.pauseFor(TREATS_RETRY_MS);
+    },
+    after: res => { huntTreats = res.value; renderAttackPanel(); },
+  });
+
+  function refreshTreats(options) {
+    return treatsResource.refresh(options);
   }
 
-  async function refreshOwnWar() {
-    if (!apiKey || apiPermanentlyDisabled || ownWarUnsupported) return ownWar;
-    if (Date.now() - ownWarLastAt < OWN_WAR_REFRESH_MS - 1_000 || Date.now() < globalBackoffUntil) return ownWar;
-    ownWarLastAt = Date.now();
-    try {
+  const ownWarResource = createResource('own ranked war', {
+    ttlMs: OWN_WAR_REFRESH_MS,
+    load: async () => {
       await ensurePrimaryKeyInfo();
-      if (!ownFactionId) { ownWar = null; return null; }
+      if (!ownFactionId) return null;
       const data = await apiGet('/faction/wars', { cacheBust: true });
       const ranked = data?.wars?.ranked;
       const enemy = (Array.isArray(ranked?.factions) ? ranked.factions : []).find(item => Number(item?.id) !== Number(ownFactionId));
-      ownWar = enemy ? normalizeRankedWar(ranked, enemy.id, Math.floor(serverNowSec())) : null;
-    } catch (err) {
-      if (Number(err?.code) === 7 || Number(err?.code) === 16 || (err && !err.retryable && err.message !== 'API backoff active.')) {
-        ownWarUnsupported = true;
-        ownWar = null;
-      } else if (err?.message !== 'API backoff active.') {
-        console.warn(`[${SCRIPT}] Could not check your faction's ranked war`, err);
-      }
-    }
-    return ownWar;
+      return enemy ? normalizeRankedWar(ranked, enemy.id, Math.floor(serverNowSec())) : null;
+    },
+    after: res => { ownWar = res.value; },
+  });
+
+  function refreshOwnWar(options) {
+    return ownWarResource.refresh(options);
   }
 
   // One line above the hunt hint when hunting could cost the faction: a chain bonus hit is next, or a ranked war is on.
@@ -7106,7 +7138,7 @@
           refreshHitCounts().catch(() => { /* handled inside */ });
         }
       } catch (err) {
-        if (err?.message !== 'API backoff active.') {
+        if (!isApiBackoff(err)) {
           registerApiFailure(err);
           console.warn(`[${SCRIPT}] Could not refresh attack target status`, err);
         }
@@ -7392,7 +7424,7 @@
       renderAttackPanel();
     } catch (err) {
       if (Number(err?.code) === 16 || Number(err?.code) === 7) attackHistoryFeatureState = 'unsupported';
-      else if (err?.message !== 'API backoff active.') console.warn(`[${SCRIPT}] Could not ingest recent attacks on the attack page`, err);
+      else if (!isApiBackoff(err)) console.warn(`[${SCRIPT}] Could not ingest recent attacks on the attack page`, err);
     }
   }
 
