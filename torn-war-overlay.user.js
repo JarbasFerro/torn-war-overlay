@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.30.1
+// @version      0.30.2
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling, plus a hunt mode that scans for easy wins.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -12,7 +12,6 @@
 // @match        https://www.torn.com/loader2.php?sid=attack*
 // @match        https://www.torn.com/page.php?sid=attack*
 // @match        https://www.torn.com/index.php*
-// @match        https://www.torn.com/item.php*
 // @connect      api.torn.com
 // @grant        GM_xmlhttpRequest
 // @grant        GM_registerMenuCommand
@@ -28,7 +27,6 @@
     if (!/(^|\.)torn\.com$/i.test(location.hostname)) return null;
     if (location.pathname === '/factions.php') return 'faction';
     if (location.pathname === '/index.php' || location.pathname === '/') return 'home'; // v0.29: hunt card.
-    if (location.pathname === '/item.php') return 'items'; // v0.29: basket shortcut lands here.
     if (/^\/(loader|loader2|page)\.php$/.test(location.pathname)) {
       const params = new URLSearchParams(location.search);
       if (params.get('sid') === 'attack' && /^\d+$/.test(params.get('user2ID') || '')) return 'attack';
@@ -38,7 +36,7 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const SCRIPT_VERSION = '0.30.1';
+  const SCRIPT_VERSION = '0.30.2';
   const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0260__';
   if (window[INSTANCE_KEY]) {
     console.warn(`[${SCRIPT}] v0.26.0 is already running; duplicate injection ignored.`);
@@ -5055,7 +5053,6 @@
       .two-hd-basket { margin-top:5px; }
       .two-basket-line { display:flex; align-items:center; gap:8px; font-size:var(--two-fs-sm); color:var(--two-fg); font-variant-numeric:tabular-nums; }
       .two-basket-text { flex:1 1 auto; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      .two-basket-link { flex:0 0 auto; display:inline-flex; align-items:center; min-height:var(--two-ctl-sm); padding:0 8px; border-radius:var(--two-r); border:1px solid var(--two-good); background:var(--two-btn); color:var(--two-fg); font:700 var(--two-fs-sm)/1 var(--two-font); text-decoration:none; }
       .two-basket-bar { margin-top:3px; height:4px; border-radius:2px; background:var(--two-strip); overflow:hidden; }
       .two-basket-bar[hidden], .two-hd-basket[hidden] { display:none !important; }
       .two-basket-fill { height:100%; width:0; background:var(--two-warn); transition:width .3s ease-out; }
@@ -5063,8 +5060,6 @@
       .two-goals-line { margin-top:4px; font-size:var(--two-fs-sm); font-variant-numeric:tabular-nums; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--two-fg); }
       .two-goals-line.two-goals-good { color:var(--two-good); }
       .two-goals-line.two-goals-warn { color:var(--two-warn); }
-      .two-basket-notice-text { font-size:var(--two-fs-md); color:var(--two-fg); }
-      .two-basket-hit { outline:3px solid var(--two-good) !important; outline-offset:-3px; background:var(--two-good-bg) !important; }
       .two-hd-guard { margin-top:5px; padding:3px 6px; border-left:var(--two-edge) solid var(--two-strip-border); border-radius:var(--two-r-sm); font-size:var(--two-fs-sm); background:var(--two-strip); color:var(--two-fg); }
       .two-hd-guard-bad { border-left-color:var(--two-bad); color:var(--two-bad); background:var(--two-bad-bg); }
       .two-hd-guard-warn { border-left-color:var(--two-warn); color:var(--two-warn); background:var(--two-warn-bg); }
@@ -6734,22 +6729,6 @@
     return `🎃 ${p.tier} ${formatCount(p.inStep)}/${formatCount(p.stepSize)} → ${p.next}`;
   }
 
-  // Basket shortcut: open the items page, where initItemsPage scrolls to the basket and highlights it. The player taps
-  // Use; nothing is clicked for them. sessionStorage marks that this visit came from the shortcut.
-  const BASKET_JUMP_KEY = 'two.basketJump';
-
-  function makeBasketLink(className) {
-    const link = document.createElement('a');
-    link.className = className;
-    link.href = '/item.php';
-    link.textContent = 'Basket ▸';
-    link.setAttribute('aria-label', 'Open your Halloween basket on the items page');
-    link.addEventListener('click', () => {
-      try { sessionStorage.setItem(BASKET_JUMP_KEY, String(Date.now())); } catch { /* the page still opens */ }
-    });
-    return link;
-  }
-
   function renderBasketRow(row, bar, fill, text) {
     const treats = huntTreats;
     row.hidden = !treats;
@@ -6770,7 +6749,7 @@
     line.className = 'two-basket-line';
     const text = document.createElement('span');
     text.className = 'two-basket-text';
-    line.append(text, makeBasketLink('two-basket-link'));
+    line.append(text);
     const bar = document.createElement('div');
     bar.className = 'two-basket-bar';
     const fill = document.createElement('div');
@@ -7487,88 +7466,6 @@
     window.addEventListener('pagehide', () => flushPersistentState());
   }
 
-  // Items page: arrived through the basket shortcut within the last minute. Torn keeps one ul.itemsList per category and
-  // hides the inactive ones (aria-hidden="true"), so only a basket row the player can see counts. If the open list has
-  // none, a notice offers "Show Special Items": the player's tap switches Torn's tab (one action per click), then the
-  // basket is scrolled to and highlighted once that list loads. Nothing is clicked without a tap.
-  function isShown(el) {
-    return Boolean(el) && !el.closest?.('[aria-hidden="true"]') && (typeof el.getClientRects !== 'function' || el.getClientRects().length > 0);
-  }
-
-  function findBasketRow() {
-    for (const li of document.querySelectorAll('ul.itemsList > li, li[data-item]')) {
-      const text = li.textContent || '';
-      if (/Halloween Basket/i.test(text) && text.length < 400 && isShown(li)) return li;
-    }
-    return null;
-  }
-
-  function findSpecialTab() {
-    for (const el of document.querySelectorAll('[title], [aria-label], [data-title]')) {
-      if (el.closest?.('.two-hunt-dock')) continue;
-      const label = `${el.getAttribute('title') || ''} ${el.getAttribute('aria-label') || ''} ${el.getAttribute('data-title') || ''}`;
-      if (/special/i.test(label) && isShown(el)) return el;
-    }
-    return null;
-  }
-
-  function showBasketNotice(onShowTab) {
-    let notice = document.querySelector?.('.two-basket-notice');
-    if (!notice) {
-      notice = document.createElement('div');
-      notice.className = 'two-hunt-dock two-basket-notice';
-      notice.setAttribute('role', 'status');
-      const text = document.createElement('div');
-      text.className = 'two-basket-notice-text';
-      const buttons = document.createElement('div');
-      buttons.className = 'two-hd-buttons';
-      const show = makeDockButton('two-hd-tools two-basket-show', 'Show Special Items', 'Switch Torn to the Special Items tab, where the basket lives', () => onShowTab());
-      const close = makeDockButton('two-hd-tools', 'Close', 'Hide this notice', () => { notice.hidden = true; });
-      buttons.append(show, close);
-      notice.append(text, buttons);
-      Object.assign(notice, { __text: text, __show: show });
-      (document.body || document.documentElement).appendChild(notice);
-    }
-    notice.hidden = false;
-    const tab = findSpecialTab();
-    notice.__show.hidden = !tab;
-    setText(notice.__text, tab
-      ? 'Your Halloween basket is under Special Items.'
-      : 'Your Halloween basket is under Special Items: tap that tab above.');
-    updateHuntDockOffset(notice);
-    return notice;
-  }
-
-  function initItemsPage() {
-    let at = 0;
-    try { at = Number(sessionStorage.getItem(BASKET_JUMP_KEY)) || 0; sessionStorage.removeItem(BASKET_JUMP_KEY); } catch { return; }
-    if (!at || Date.now() - at > 60_000) return;
-    let deadline = Date.now() + 3_000;
-    let noticeShown = false;
-    const look = () => {
-      const row = findBasketRow();
-      if (row) {
-        row.classList.add('two-basket-hit');
-        try { row.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch { row.scrollIntoView(); }
-        const notice = document.querySelector?.('.two-basket-notice');
-        if (notice) notice.hidden = true;
-        pdaToast('Your Halloween basket: tap it, then Use', 'info', 4);
-        return;
-      }
-      if (Date.now() <= deadline) { setTimeout(look, 300); return; }
-      if (!noticeShown) {
-        noticeShown = true;
-        showBasketNotice(() => {
-          const tab = findSpecialTab();
-          if (tab) tab.click(); // The player's tap on "Show Special Items" is the one action.
-          deadline = Date.now() + 15_000;
-          setTimeout(look, 300);
-        });
-      }
-    };
-    look();
-  }
-
   async function init() {
     injectStyles();
     prunePersistentCaches();
@@ -7592,7 +7489,6 @@
       return;
     }
     if (PAGE_MODE === 'home') { await initHomePage(); return; }
-    if (PAGE_MODE === 'items') { initItemsPage(); return; }
 
     installNavigationHooks();
     try { window.__TWO_DIAGNOSTICS__ = getDiagnosticSnapshot; } catch { /* optional debug hook */ }

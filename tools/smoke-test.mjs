@@ -10,7 +10,7 @@
 //      script runs from it and later writes land there; a failing or mismatching store keeps localStorage untouched;
 //   6. Torn PDA app bridge: a background tab (PDA_getTabState says inactive) makes no hunt requests until the tab
 //      becomes active, the storage move shows a native toast, and the userscript menu mirrors the tools list;
-//   7. the home page shows the hunt card only while hunting; the items page runs quietly;
+//   7. the home page shows the hunt card only while hunting;
 //   8. an unrelated page: the script does not run.
 // Run: node tools/smoke-test.mjs
 
@@ -240,18 +240,6 @@ if (!/^🎯 Today [34]\/50/.test(home.home?.__goals?.textContent || '')) { faile
 if (home.home?.__basket?.text?.textContent !== '🎃 Horrifying 294/1,000 → Petrifying') { failed = true; console.error('Home: basket progress missing', home.home?.__basket?.text?.textContent); }
 const homeOff = await boot({ pathname: '/index.php', search: '', seed: { 'two.apiKey.v1': 'ABCDEFGHIJKLMNOP', 'two.hunt.v1': JSON.stringify({ enabled: false, pool: {} }) }, fetchImpl: huntFetch, waitMs: 300 });
 if (homeOff.home || homeOff.errors.length > 0) { failed = true; console.error('Home: no card (and no errors) while hunt mode is off', homeOff.errors); }
-const items = await boot({ pathname: '/item.php', search: '', seed: { 'two.apiKey.v1': 'ABCDEFGHIJKLMNOP' }, waitMs: 300 });
-if (items.errors.length > 0) { failed = true; console.error('ITEMS ERRORS:', items.errors.join('\n')); }
-// Arrived through Basket ▸ but the basket is not in the open list: a notice points to Special Items after 3 s.
-const jumpStore = new Map([['two.basketJump', String(Date.now())]]);
-const itemsJump = await boot({
-  pathname: '/item.php', search: '', seed: { 'two.apiKey.v1': 'ABCDEFGHIJKLMNOP' }, waitMs: 3_600,
-  globals: { sessionStorage: { getItem: k => jumpStore.get(k) ?? null, setItem: (k, v) => jumpStore.set(k, String(v)), removeItem: k => jumpStore.delete(k) } },
-});
-const basketNotice = itemsJump.body?.children?.find(node => node.__show);
-if (itemsJump.errors.length > 0 || !basketNotice || basketNotice.hidden || !/Special Items/.test(basketNotice.__text?.textContent || '')) {
-  failed = true; console.error('Items: basket notice missing', itemsJump.errors, basketNotice?.__text?.textContent);
-}
 
 // Torn PDA native storage, modelled on userscripts/TornPDA_Storage.md: async, JSON values, setMany/getMany batches.
 function makePdaStorage({ failLoad = false, corruptReadBack = false } = {}) {

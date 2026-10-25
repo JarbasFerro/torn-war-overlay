@@ -4,6 +4,10 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.30.2 - Basket shortcut removed
+
+- The `Basket ▸` button is gone from the hunt dock and the home card, together with the items-page code behind it: it did not reliably reach the basket. The script no longer runs on `item.php`. Basket progress stays.
+
 ## 0.30.1 - Hit goals count from your attack log
 
 - v0.30.0 showed `Today 0/50 · Event 0/400` after a full day of hits. It subtracted Torn's daily "attacks won" history, and that request returned today's value rather than midnight's, so nothing was ever counted. Wins are now counted fight by fight from your own attack log (`/user/attacks`, outgoing, Limited key): a fight counts when its result is a win (Attacked, Mugged, Hospitalized, Arrested and so on); losses and stalemates do not.
