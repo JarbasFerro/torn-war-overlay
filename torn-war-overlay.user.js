@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.24.2
+// @version      0.25.0
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling, plus a hunt mode that scans for easy wins.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -17,7 +17,7 @@
 // @run-at       document-end
 // ==/UserScript==
 
-(() => {
+(async () => {
   'use strict';
 
   // Safety guard: even if a userscript manager ignores metadata, never run outside the pages this script serves.
@@ -34,15 +34,18 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0242__';
+  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0250__';
   if (window[INSTANCE_KEY]) {
-    console.warn(`[${SCRIPT}] v0.24.2 is already running; duplicate injection ignored.`);
+    console.warn(`[${SCRIPT}] v0.25.0 is already running; duplicate injection ignored.`);
     return;
   }
   window[INSTANCE_KEY] = true;
 
+  // Everything below reads saved data synchronously, so the store is opened (and, in Torn PDA, loaded) first.
+  const twoStorage = await openTwoStorage();
+
   const API_BASE = 'https://api.torn.com/v2';
-  const API_COMMENT = 'two-v0.24.2';
+  const API_COMMENT = 'two-v0.25.0';
   const PDA_API_KEY = '###PDA-APIKEY###';
 
   const KEY_STORAGE = 'two.apiKey.v1';
@@ -329,9 +332,115 @@
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Storage (v0.25): Torn PDA's native per-script store (PDA_storage) when the app provides it, else localStorage.
+  //
+  // PDA_storage is app-backed SQLite: 10 MB per script by default instead of a ~5 MB localStorage shared with Torn and
+  // every other script, and it survives a browser cache clear. Its API is async, so all of this script's keys are
+  // loaded once at startup into memory; reads stay synchronous and writes are batched into one setMany shortly after,
+  // and again when the page is hidden. The first run moves the existing localStorage data across, reads it back, and
+  // only then removes the old copies; any failure keeps the script on localStorage with nothing lost.
+  // Values are stored as the same JSON strings localStorage held, so both backends behave identically.
+  // ---------------------------------------------------------------------------
+  async function openTwoStorage() {
+    const PREFIX = 'two.';
+    const MIGRATED_MARK = 'two.__migratedFromLocalStorage';
+    const tag = '[Torn War Overlay]';
+    const local = {
+      backend: 'localStorage',
+      quotaFull: false,
+      getItem(key) { try { return localStorage.getItem(key); } catch { return null; } },
+      setItem(key, value) { localStorage.setItem(key, value); },
+      removeItem(key) { try { localStorage.removeItem(key); } catch { /* ignore */ } return Promise.resolve(); },
+      flush() { return Promise.resolve(); },
+      usage() { return Promise.resolve(null); },
+    };
+    const store = typeof PDA_storage !== 'undefined' ? PDA_storage : null;
+    if (!store || ['loadAll', 'getMany', 'setMany', 'delete'].some(name => typeof store[name] !== 'function')) return local;
+
+    const timeout = (promise, ms) => Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error('PDA_storage timed out')), ms))]);
+    const mem = new Map();
+    try {
+      const all = await timeout(store.loadAll(), 5_000);
+      for (const [key, value] of Object.entries(all || {})) {
+        if (typeof value === 'string') mem.set(key, value);
+      }
+      if (!mem.has(MIGRATED_MARK)) {
+        const moved = {};
+        let count = 0;
+        try { count = localStorage.length; } catch { count = 0; }
+        for (let i = 0; i < count; i += 1) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith(PREFIX) && !mem.has(key)) moved[key] = localStorage.getItem(key);
+        }
+        moved[MIGRATED_MARK] = new Date().toISOString();
+        await timeout(store.setMany(moved), 10_000);
+        const readBack = await timeout(store.getMany(Object.keys(moved)), 10_000);
+        const verified = Object.entries(moved).every(([key, value]) => readBack?.[key] === value);
+        if (!verified) throw new Error('read-back did not match');
+        for (const [key, value] of Object.entries(moved)) {
+          mem.set(key, value);
+          if (key !== MIGRATED_MARK) { try { localStorage.removeItem(key); } catch { /* ignore */ } }
+        }
+        console.info(`${tag} Moved ${Object.keys(moved).length - 1} saved items from localStorage to Torn PDA storage.`);
+      }
+    } catch (err) {
+      console.warn(`${tag} Torn PDA storage unavailable; using localStorage.`, err);
+      return local;
+    }
+
+    const dirty = new Set();
+    let timer = null;
+    const native = {
+      backend: 'pda',
+      quotaFull: false,
+      getItem(key) { return mem.has(key) ? mem.get(key) : null; },
+      setItem(key, value) {
+        mem.set(key, String(value));
+        dirty.add(key);
+        if (!timer) timer = setTimeout(() => native.flush(), 400);
+      },
+      removeItem(key) {
+        mem.delete(key);
+        dirty.delete(key);
+        return Promise.resolve(store.delete(key)).catch(err => console.warn(`${tag} Could not delete ${key} from Torn PDA storage`, err));
+      },
+      async flush() {
+        if (timer) { clearTimeout(timer); timer = null; }
+        if (dirty.size === 0) return;
+        const batch = {};
+        for (const key of dirty) batch[key] = mem.get(key);
+        dirty.clear();
+        try {
+          await store.setMany(batch);
+        } catch (err) {
+          if (err?.code === 'QuotaExceeded') {
+            native.quotaFull = true; // Torn PDA already told the user; retrying cannot help until they raise the limit.
+            console.warn(`${tag} Torn PDA storage is full; the latest changes were kept in memory only.`, err);
+            return;
+          }
+          for (const key of Object.keys(batch)) if (mem.has(key)) dirty.add(key);
+          if (!timer) timer = setTimeout(() => native.flush(), 5_000);
+          console.warn(`${tag} Could not write to Torn PDA storage; retrying.`, err);
+        }
+      },
+      usage() { return typeof store.usage === 'function' ? Promise.resolve(store.usage()).catch(() => null) : Promise.resolve(null); },
+    };
+    window.addEventListener('pagehide', () => { native.flush(); });
+    document.addEventListener('visibilitychange', () => { if (document.hidden) native.flush(); });
+    return native;
+  }
+
+  // Remove keys, wait until the store has them gone, then reload (menu commands).
+  function clearStoredAndReload(...keys) {
+    Promise.all(keys.map(key => twoStorage.removeItem(key)))
+      .then(() => twoStorage.flush())
+      .finally(() => window.location.reload());
+  }
+
   function loadJson(key, fallback) {
     try {
-      const raw = localStorage.getItem(key);
+      const raw = twoStorage.getItem(key);
       return raw ? JSON.parse(raw) : fallback;
     } catch {
       return fallback;
@@ -346,7 +455,7 @@
 
   function saveJson(key, value) {
     try {
-      localStorage.setItem(key, JSON.stringify(value));
+      twoStorage.setItem(key, JSON.stringify(value));
     } catch (err) {
       console.warn(`[${SCRIPT}] Could not save ${key}`, err);
     }
@@ -603,12 +712,9 @@
   }
 
   settings = loadSettings();
-  try {
-    localStorage.removeItem('two.pins.v1');
-    localStorage.removeItem('two.attackHistoryCache.v1');
-    localStorage.removeItem(LEGACY_ATTACK_HISTORY_CACHE_STORAGE);
-    localStorage.removeItem(LEGACY_STRENGTH_CACHE_STORAGE);
-  } catch { /* legacy cleanup */ }
+  for (const legacyKey of ['two.pins.v1', 'two.attackHistoryCache.v1', LEGACY_ATTACK_HISTORY_CACHE_STORAGE, LEGACY_STRENGTH_CACHE_STORAGE]) {
+    if (twoStorage.getItem(legacyKey) !== null) twoStorage.removeItem(legacyKey);
+  }
   settings.diagnosticMode = false;
   saveSettings();
 
@@ -647,7 +753,7 @@
 
   function getStoredApiKey() {
     if (isPdaKey(PDA_API_KEY)) return PDA_API_KEY.trim();
-    const stored = localStorage.getItem(KEY_STORAGE);
+    const stored = twoStorage.getItem(KEY_STORAGE);
     return isLikelyApiKey(stored) ? stored.trim() : null;
   }
 
@@ -658,7 +764,7 @@
       window.alert(`${SCRIPT}: that does not look like a 16-character Torn API key.`);
       return false;
     }
-    localStorage.setItem(KEY_STORAGE, entered.trim());
+    twoStorage.setItem(KEY_STORAGE, entered.trim());
     apiKey = entered.trim();
     apiPermanentlyDisabled = false;
     window.location.reload();
@@ -666,7 +772,7 @@
   }
 
   function getStoredAttackApiKey() {
-    const stored = localStorage.getItem(ATTACK_API_KEY_STORAGE);
+    const stored = twoStorage.getItem(ATTACK_API_KEY_STORAGE);
     return isLikelyApiKey(stored) ? stored.trim() : null;
   }
 
@@ -677,7 +783,7 @@
       window.alert(`${SCRIPT}: that does not look like a 16-character Torn API key.`);
       return false;
     }
-    localStorage.setItem(ATTACK_API_KEY_STORAGE, entered.trim());
+    twoStorage.setItem(ATTACK_API_KEY_STORAGE, entered.trim());
     attackApiKey = entered.trim();
     attackKeyInfo = null;
     attackKeyInfoPromise = null;
@@ -689,7 +795,7 @@
   }
 
   function clearAttackApiKey() {
-    localStorage.removeItem(ATTACK_API_KEY_STORAGE);
+    twoStorage.removeItem(ATTACK_API_KEY_STORAGE);
     attackApiKey = null;
     attackKeyInfo = null;
     attackKeyInfoPromise = null;
@@ -706,7 +812,8 @@
       : null;
     return {
       script: SCRIPT,
-      version: '0.22.1',
+      version: '0.25.0',
+      storage: { backend: twoStorage.backend, quotaFull: twoStorage.quotaFull },
       generatedAt: new Date().toISOString(),
       active: isActiveView(),
       factionId: Number.isFinite(Number(activeFactionId)) ? Number(activeFactionId) : null,
@@ -785,33 +892,17 @@
       GM_registerMenuCommand('Torn War Overlay: set API key', setManualApiKey);
       GM_registerMenuCommand('Torn War Overlay: open settings', openSettingsDialog);
       GM_registerMenuCommand('Torn War Overlay: show RC diagnostics', showDiagnosticSnapshot);
-      GM_registerMenuCommand('Torn War Overlay: reset settings', () => { localStorage.removeItem(SETTINGS_STORAGE); window.location.reload(); });
-      GM_registerMenuCommand('Torn War Overlay: clear cached ages', () => {
-        localStorage.removeItem(SIGNUP_CACHE_STORAGE);
-        localStorage.removeItem(LEGACY_PROFILE_CACHE_STORAGE);
-        window.location.reload();
-      });
-      GM_registerMenuCommand('Torn War Overlay: clear cached statuses', () => {
-        localStorage.removeItem(FACTION_STATUS_CACHE_STORAGE);
-        window.location.reload();
-      });
+      GM_registerMenuCommand('Torn War Overlay: reset settings', () => clearStoredAndReload(SETTINGS_STORAGE));
+      GM_registerMenuCommand('Torn War Overlay: clear cached ages', () => clearStoredAndReload(SIGNUP_CACHE_STORAGE, LEGACY_PROFILE_CACHE_STORAGE));
+      GM_registerMenuCommand('Torn War Overlay: clear cached statuses', () => clearStoredAndReload(FACTION_STATUS_CACHE_STORAGE));
       GM_registerMenuCommand('Torn War Overlay: set attack-history key', setAttackApiKey);
       GM_registerMenuCommand('Torn War Overlay: clear attack-history key', clearAttackApiKey);
-      GM_registerMenuCommand('Torn War Overlay: clear cached attack dots', () => {
-        localStorage.removeItem(ATTACK_HISTORY_CACHE_STORAGE);
-        window.location.reload();
-      });
+      GM_registerMenuCommand('Torn War Overlay: clear cached attack dots', () => clearStoredAndReload(ATTACK_HISTORY_CACHE_STORAGE));
       GM_registerMenuCommand('Torn War Overlay: hunt mode on/off', () => setHuntEnabled(!huntState.enabled));
-      GM_registerMenuCommand('Torn War Overlay: restart hunt scan from my ID', () => { resetHuntCursor(); window.location.reload(); });
-      GM_registerMenuCommand('Torn War Overlay: clear hunt pool', () => { localStorage.removeItem(HUNT_STORAGE); window.location.reload(); });
-      GM_registerMenuCommand('Torn War Overlay: clear personal intel memory', () => {
-        localStorage.removeItem(OPPONENT_INTEL_STORAGE);
-        localStorage.removeItem(SELF_INTEL_STORAGE);
-        localStorage.removeItem(STRENGTH_CACHE_STORAGE);
-        // The attack cursor must go too, otherwise only the newest page would be re-read after the reload.
-        localStorage.removeItem(ATTACK_HISTORY_CACHE_STORAGE);
-        window.location.reload();
-      });
+      GM_registerMenuCommand('Torn War Overlay: restart hunt scan from my ID', () => { resetHuntCursor(); twoStorage.flush().finally(() => window.location.reload()); });
+      GM_registerMenuCommand('Torn War Overlay: clear hunt pool', () => clearStoredAndReload(HUNT_STORAGE));
+      // The attack cursor must go too, otherwise only the newest page would be re-read after the reload.
+      GM_registerMenuCommand('Torn War Overlay: clear personal intel memory', () => clearStoredAndReload(OPPONENT_INTEL_STORAGE, SELF_INTEL_STORAGE, STRENGTH_CACHE_STORAGE, ATTACK_HISTORY_CACHE_STORAGE));
     } catch {
       // Torn PDA does not necessarily implement menu commands.
     }
@@ -5014,6 +5105,7 @@
     pruneStrengthCache();
     saveJson(STRENGTH_CACHE_STORAGE, strengthCache);
     if (huntSaveTimer) saveHuntState({ now: true });
+    twoStorage.flush(); // Torn PDA's store is async: push the batched writes now, the page may be going away.
   }
 
   function runSelfTests() {
@@ -6700,4 +6792,4 @@
   }
 
   init().catch(err => console.error(`[${SCRIPT}] Initialization failed`, err));
-})();
+})().catch(err => console.error('[Torn War Overlay] Startup failed', err));

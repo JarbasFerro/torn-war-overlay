@@ -6,7 +6,9 @@
 //   3. attack page mode with a key and a stubbed API: the panel mounts and shows the target's hospital countdown;
 //   4. attack page mode with hunt mode on: a stale saved target is refreshed through its faction roster and offered
 //      as the next target, then the scanner keeps a weak player and skips a strong one and a missing ID;
-//   5. an unrelated page: the script does not run.
+//   5. Torn PDA native storage: existing localStorage data moves into PDA_storage (verified, then removed locally), the
+//      script runs from it and later writes land there; a failing or mismatching store keeps localStorage untouched;
+//   6. an unrelated page: the script does not run.
 // Run: node tools/smoke-test.mjs
 
 import { readFileSync } from 'node:fs';
@@ -45,7 +47,7 @@ function makeElement(tag = 'div') {
   return element;
 }
 
-async function boot({ pathname, search, seed = {}, fetchImpl = null, waitMs = 150 }) {
+async function boot({ pathname, search, seed = {}, fetchImpl = null, waitMs = 150, globals = {} }) {
   const errors = [];
   const warnings = [];
   const storage = new Map(Object.entries(seed));
@@ -80,6 +82,8 @@ async function boot({ pathname, search, seed = {}, fetchImpl = null, waitMs = 15
       getItem: key => (storage.has(key) ? storage.get(key) : null),
       setItem: (key, value) => storage.set(key, String(value)),
       removeItem: key => storage.delete(key),
+      get length() { return storage.size; },
+      key: index => Array.from(storage.keys())[index] ?? null,
     },
     performance: { now: () => Number(process.hrtime.bigint() / 1_000_000n) },
     setTimeout, clearTimeout, setInterval, clearInterval,
@@ -91,6 +95,7 @@ async function boot({ pathname, search, seed = {}, fetchImpl = null, waitMs = 15
     history: { pushState() {}, replaceState() {} },
     URL, URLSearchParams,
   };
+  Object.assign(sandbox, globals);
   sandbox.window = sandbox;
   sandbox.globalThis = sandbox;
   sandbox.prompt = () => { promptCalls += 1; return null; };
@@ -188,9 +193,48 @@ if (!dock?.__link || dock.__link.hidden || !String(dock.__link.href || '').inclu
 if (!/^\d+$/.test(dock?.__pumpCount?.textContent || '')) { failed = true; console.error('Hunt mode: ready count missing on the hunt button'); }
 if (dock?.__energy?.textContent !== '⚡4') { failed = true; console.error('Hunt mode: energy should be read with the Limited key (100 energy = 4 hits)', dock?.__energy?.textContent, dock?.__energy?.title); }
 
+// Torn PDA native storage, modelled on userscripts/TornPDA_Storage.md: async, JSON values, setMany/getMany batches.
+function makePdaStorage({ failLoad = false, corruptReadBack = false } = {}) {
+  const data = new Map();
+  const later = value => new Promise(resolve => setTimeout(() => resolve(value), 5));
+  return {
+    data,
+    loadAll: () => (failLoad ? Promise.reject(new Error('bridge down')) : later(Object.fromEntries(data))),
+    getMany: keys => later(Object.fromEntries(keys.map(key => [key, data.has(key) ? (corruptReadBack ? 'x' : data.get(key)) : null]))),
+    setMany: entries => { for (const [key, value] of Object.entries(entries)) data.set(key, value); return later(undefined); },
+    set: (key, value) => { data.set(key, value); return later(undefined); },
+    get: (key, fallback) => later(data.has(key) ? data.get(key) : fallback),
+    list: () => later(Array.from(data.keys())),
+    delete: key => { data.delete(key); return later(undefined); },
+    usage: () => later({ used: 0, quota: 10 * 1024 * 1024 }),
+  };
+}
+const pdaSeed = {
+  'two.apiKey.v1': 'ABCDEFGHIJKLMNOP',
+  'two.attackApiKey.v1': 'LIMITEDKEYLIMITE',
+  'two.selfIntel.v1': JSON.stringify({ bss: 20000 }),
+  'two.hunt.v1': JSON.stringify({ enabled: true, cursor: 1005, pool: {} }),
+  'unrelated.key': 'kept',
+};
+const pdaStore = makePdaStorage();
+const pda = await boot({ pathname: '/loader.php', search: '?sid=attack&user2ID=123456', seed: pdaSeed, fetchImpl: huntFetch, globals: { PDA_storage: pdaStore }, waitMs: 6_500 });
+if (pda.errors.length > 0) { failed = true; console.error('PDA STORAGE ERRORS:', pda.errors.join('\n')); }
+if (pdaStore.data.get('two.apiKey.v1') !== 'ABCDEFGHIJKLMNOP' || !pdaStore.data.has('two.__migratedFromLocalStorage')) { failed = true; console.error('PDA storage: data was not moved into PDA_storage', Array.from(pdaStore.data.keys())); }
+if (Array.from(pda.storage.keys()).some(key => key.startsWith('two.')) || pda.storage.get('unrelated.key') !== 'kept') { failed = true; console.error('PDA storage: localStorage should keep only non-script keys after the move', Array.from(pda.storage.keys())); }
+if (!pda.dock || pda.dock.hidden) { failed = true; console.error('PDA storage: hunt dock should run from the moved data'); }
+const pdaHunt = JSON.parse(pdaStore.data.get('two.hunt.v1') || '{}');
+if (!pdaHunt.pool?.['1005'] || !(pdaHunt.cursor <= 1002)) { failed = true; console.error('PDA storage: later writes should land in PDA_storage', pdaHunt); }
+
+for (const [label, options] of [['failing store', { failLoad: true }], ['mismatching read-back', { corruptReadBack: true }]]) {
+  const fallback = await boot({ pathname: '/loader.php', search: '?sid=attack&user2ID=123456', seed: pdaSeed, fetchImpl: huntFetch, globals: { PDA_storage: makePdaStorage(options) } });
+  if (fallback.errors.length > 0) { failed = true; console.error(`PDA storage (${label}) ERRORS:`, fallback.errors.join('\n')); }
+  if (fallback.storage.get('two.apiKey.v1') !== 'ABCDEFGHIJKLMNOP') { failed = true; console.error(`PDA storage (${label}): localStorage data must be kept`); }
+  if (!fallback.dock) { failed = true; console.error(`PDA storage (${label}): script should still run on localStorage`); }
+}
+
 const other = await boot({ pathname: '/index.php', search: '' });
 if (other.promptCalls !== 0 || other.errors.length > 0) { failed = true; console.error('Unrelated page: script should not run'); }
 
-console.log(failed ? 'SMOKE TEST FAILED' : `SMOKE TEST OK (faction warnings: ${faction.warnings.length}, attack warnings: ${attack.warnings.length + attackWithKey.warnings.length}, hunt warnings: ${hunt.warnings.length})`);
+console.log(failed ? 'SMOKE TEST FAILED' : `SMOKE TEST OK (faction warnings: ${faction.warnings.length}, attack warnings: ${attack.warnings.length + attackWithKey.warnings.length}, hunt warnings: ${hunt.warnings.length}, pda warnings: ${pda.warnings.length})`);
 for (const line of [...faction.warnings, ...attack.warnings, ...attackWithKey.warnings, ...hunt.warnings]) console.log(`  warn: ${line}`);
 process.exit(failed ? 1 : 0);

@@ -108,7 +108,7 @@ Torn War Overlay communicates only with Torn's official API at `api.torn.com`.
 - No third-party strength/scouting service.
 - No automated attacks, clicks or attack initiation.
 - No hidden-tab target alerts.
-- Manual API keys, when used, are stored locally on the device/browser and are used by this script only for Torn API requests.
+- Manual API keys, when used, are stored on the device (Torn PDA's app storage in Torn PDA, the browser's local storage elsewhere) and are used by this script only for Torn API requests.
 
 The script pauses live page processing when the Torn page is not actively viewed and revalidates live faction status when returning. It never generates alerts or draws attention from an unfocused page.
 
@@ -116,10 +116,10 @@ Torn API ToS disclosure:
 
 | Item | Statement |
 |---|---|
-| Data storage | Faction statuses, account ages, public training stats, your own attack results and derived opponent intel, plus the hunt-mode target pool and scan position, are stored locally on the device/browser only. |
+| Data storage | Faction statuses, account ages, public training stats, your own attack results and derived opponent intel, plus the hunt-mode target pool and scan position, are stored on the device only: in Torn PDA's per-script app storage when running in Torn PDA, otherwise in local browser storage. |
 | Data sharing | None. No backend, no analytics, no third-party service. |
 | Purpose of use | Ranked-war target overlay on the faction page and attack page, and a hunt mode on the attack page that finds easy targets for the Halloween event. You open every attack yourself. |
-| Key storage and sharing | Manual keys are stored in local browser storage and sent only to `api.torn.com`. Torn PDA supplies its own key. Keys are never shared. |
+| Key storage and sharing | Manual keys are stored on the device (Torn PDA's per-script app storage in Torn PDA, local browser storage elsewhere) and sent only to `api.torn.com`. Torn PDA supplies its own key. Keys are never shared. |
 | Key access level | Public for the core overlay. Limited (or Custom with `user -> attacks` and `user -> battlestats`) for personal intel. |
 
 ## Performance design
@@ -173,11 +173,11 @@ Do **not** post API keys in an issue.
 
 ## Development status
 
-Current release candidate: **v0.24.2**.
+Current release candidate: **v0.25.0**.
 
-v0.24.0 adds the bottom-docked hunt panel. v0.23.0 adds hunt mode for the Halloween event. v0.22.0 adds the Leave or Hospitalize hint. v0.21.0 adds the tap-to-explain sheet on the faction list. v0.20.0 captures each fight's result on the attack page and offers the next best target. v0.19.0 bounds every estimate by Torn's rank band and models win probability from the combat formulas. v0.18 added list filters, `OUT EARLY` labels and several live-war fixes. v0.17.0 carries the verdict, expected value, hospital countdown and chain state onto the attack page. v0.16.0 replaced the v0.15 strength estimate with a model built on Torn's gym formula, natural energy and self-calibration from real fights. The green/yellow targeting path is unchanged since v0.13.1 apart from the null-timer fix and API-sourced levels; old members now show their exact age instead of `>=1.5y`.
+v0.25.0 stores data in Torn PDA's native storage when available. v0.24.0 adds the bottom-docked hunt panel. v0.23.0 adds hunt mode for the Halloween event. v0.22.0 adds the Leave or Hospitalize hint. v0.21.0 adds the tap-to-explain sheet on the faction list. v0.20.0 captures each fight's result on the attack page and offers the next best target. v0.19.0 bounds every estimate by Torn's rank band and models win probability from the combat formulas. v0.18 added list filters, `OUT EARLY` labels and several live-war fixes. v0.17.0 carries the verdict, expected value, hospital countdown and chain state onto the attack page. v0.16.0 replaced the v0.15 strength estimate with a model built on Torn's gym formula, natural energy and self-calibration from real fights. The green/yellow targeting path is unchanged since v0.13.1 apart from the null-timer fix and API-sourced levels; old members now show their exact age instead of `>=1.5y`.
 
-Hunt mode (v0.23.0) has so far only been exercised against a stubbed API; the first live session should confirm the ready count grows and the `NEXT` targets are real easy wins.
+Hunt mode has been used live in Torn PDA since v0.23. The native storage in v0.25.0 has so far only been tested against a stand-in for `PDA_storage` built from Torn PDA's documentation; the first live run should confirm the move succeeds (the console logs how many items moved).
 
 The v0.13 line was validated in real ranked-war use. v0.14 to v0.16 need the same real-war validation before promotion; `docs/RESEARCH-2026-09-13.md` explains the model and lists what to check.
 

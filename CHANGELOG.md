@@ -4,6 +4,15 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.25.0 - Torn PDA native storage
+
+- In Torn PDA the script now keeps everything it saves (API keys, settings, hunt pool, opponent intel, caches) in `PDA_storage`, Torn PDA's per-script store backed by the app. It has 10 MB per script by default (the user can raise it in the app) instead of a localStorage of about 5 MB shared with Torn and every other script, and it survives clearing the browser cache. Tampermonkey and other managers keep using localStorage.
+- The store is loaded once when the page opens, so reads stay instant; writes are batched into one call shortly after a change and again when the page is hidden.
+- On the first run in Torn PDA the existing localStorage data is moved across, read back to confirm it arrived intact, and only then removed from localStorage. If the store is unavailable or the read-back does not match, the script keeps using localStorage and nothing is lost.
+- When the store is full, Torn PDA notifies you and the script stops retrying; the diagnostics snapshot shows the storage backend and whether it is full.
+- Menu commands that clear data now wait for the store before reloading.
+- The diagnostics snapshot reports the current version instead of 0.22.1.
+
 ## 0.24.2 - Hunt dock stays put
 
 - The dock no longer jumps around the bottom of the screen. Torn's chat buttons live inside a large invisible fixed layer, and v0.24.1 measured that layer instead of the buttons, so the dock floated about 130 px too high after the chat loaded. Only a short bar on the bottom edge, or the small button actually under the test point, now counts.
