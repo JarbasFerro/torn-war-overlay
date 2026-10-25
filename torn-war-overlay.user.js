@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.28.1
+// @version      0.29.0
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling, plus a hunt mode that scans for easy wins.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -11,6 +11,8 @@
 // @match        https://www.torn.com/loader.php?sid=attack*
 // @match        https://www.torn.com/loader2.php?sid=attack*
 // @match        https://www.torn.com/page.php?sid=attack*
+// @match        https://www.torn.com/index.php*
+// @match        https://www.torn.com/item.php*
 // @connect      api.torn.com
 // @grant        GM_xmlhttpRequest
 // @grant        GM_registerMenuCommand
@@ -25,6 +27,8 @@
   const PAGE_MODE = (() => {
     if (!/(^|\.)torn\.com$/i.test(location.hostname)) return null;
     if (location.pathname === '/factions.php') return 'faction';
+    if (location.pathname === '/index.php' || location.pathname === '/') return 'home'; // v0.29: hunt card.
+    if (location.pathname === '/item.php') return 'items'; // v0.29: basket shortcut lands here.
     if (/^\/(loader|loader2|page)\.php$/.test(location.pathname)) {
       const params = new URLSearchParams(location.search);
       if (params.get('sid') === 'attack' && /^\d+$/.test(params.get('user2ID') || '')) return 'attack';
@@ -34,7 +38,7 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const SCRIPT_VERSION = '0.28.1';
+  const SCRIPT_VERSION = '0.29.0';
   const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0260__';
   if (window[INSTANCE_KEY]) {
     console.warn(`[${SCRIPT}] v0.26.0 is already running; duplicate injection ignored.`);
@@ -5047,7 +5051,15 @@
       .two-hd-energy { color:var(--two-warn); font-size:var(--two-fs-md); white-space:nowrap; font-variant-numeric:tabular-nums; }
       .two-hd-energy.two-hd-energy-out { color:var(--two-bad); }
       .two-hd-icon { appearance:none; -webkit-appearance:none; flex:0 0 34px; width:34px; height:34px; margin:0; padding:0; border-radius:50%; border:1px solid var(--two-btn-border); background:var(--two-btn); color:var(--two-fg); font:800 var(--two-fs-xl)/1 var(--two-font); cursor:pointer; touch-action:manipulation; }
-      .two-hd-treats { color:var(--two-warn); font-size:var(--two-fs-md); white-space:nowrap; font-variant-numeric:tabular-nums; }
+      .two-hd-basket { margin-top:5px; }
+      .two-basket-line { display:flex; align-items:center; gap:8px; font-size:var(--two-fs-sm); color:var(--two-fg); font-variant-numeric:tabular-nums; }
+      .two-basket-text { flex:1 1 auto; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .two-basket-link { flex:0 0 auto; display:inline-flex; align-items:center; min-height:var(--two-ctl-sm); padding:0 8px; border-radius:var(--two-r); border:1px solid var(--two-good); background:var(--two-btn); color:var(--two-fg); font:700 var(--two-fs-sm)/1 var(--two-font); text-decoration:none; }
+      .two-basket-bar { margin-top:3px; height:4px; border-radius:2px; background:var(--two-strip); overflow:hidden; }
+      .two-basket-bar[hidden], .two-hd-basket[hidden] { display:none !important; }
+      .two-basket-fill { height:100%; width:0; background:var(--two-warn); transition:width .3s ease-out; }
+      .two-home-next { margin-top:7px; min-height:44px; text-decoration:none; }
+      .two-basket-hit { outline:3px solid var(--two-good) !important; outline-offset:-3px; background:var(--two-good-bg) !important; }
       .two-hd-guard { margin-top:5px; padding:3px 6px; border-left:var(--two-edge) solid var(--two-strip-border); border-radius:var(--two-r-sm); font-size:var(--two-fs-sm); background:var(--two-strip); color:var(--two-fg); }
       .two-hd-guard-bad { border-left-color:var(--two-bad); color:var(--two-bad); background:var(--two-bad-bg); }
       .two-hd-guard-warn { border-left-color:var(--two-warn); color:var(--two-warn); background:var(--two-warn-bg); }
@@ -6355,9 +6367,6 @@
     const status = document.createElement('span');
     const energy = document.createElement('span');
     energy.className = 'two-hd-energy';
-    const treats = document.createElement('span');
-    treats.className = 'two-hd-treats';
-    treats.hidden = true;
     const info = makeDockButton('two-hd-icon', 'i', 'Show hunt details', () => { huntDetailOpen = !huntDetailOpen; renderAttackPanel(); });
     const minimize = makeDockButton('two-hd-icon', '–', 'Minimise; hunting continues', () => {
       if (attackFightActive && !attackFightResult) { huntOpenedDuringFight = false; renderAttackPanel(); return; }
@@ -6365,7 +6374,8 @@
       saveHuntState();
       renderAttackPanel();
     });
-    top.append(name, verdict, status, energy, treats, info, minimize);
+    top.append(name, verdict, status, energy, info, minimize);
+    const basket = makeBasketRow('two-hd');
 
     const guard = document.createElement('div');
     guard.hidden = true;
@@ -6409,7 +6419,7 @@
     detail.className = 'two-hd-detail';
     detail.hidden = true;
 
-    full.append(top, guard, hint, result, actions, detail);
+    full.append(top, basket.row, guard, hint, result, actions, detail);
 
     const pill = makeDockButton('two-hd-pill', '', 'Show the hunt panel', () => {
       if (attackFightActive && !attackFightResult) huntOpenedDuringFight = true;
@@ -6420,7 +6430,7 @@
 
     dock.append(full, pill);
     Object.assign(dock, {
-      __twoHuntDock: true, __full: full, __name: name, __verdict: verdict, __status: status, __energy: energy, __treats: treats, __guard: guard,
+      __twoHuntDock: true, __full: full, __name: name, __verdict: verdict, __status: status, __energy: energy, __basket: basket, __guard: guard,
       __hint: hint, __result: result, __resultChip: resultChip, __treatGain: treatGain, __session: session, __pumpCount: pumpCount, __link: link,
       __linkMain: linkMain, __linkSub: linkSub, __waiting: waiting, __waitMain: waitMain, __waitSub: waitSub,
       __detail: detail, __pill: pill,
@@ -6473,11 +6483,7 @@
       : `Energy unavailable${ownBarsError ? `: ${ownBarsError}` : ' (not read yet)'}.`;
 
     const treats = huntTreats;
-    dock.__treats.hidden = !treats;
-    if (treats) {
-      setText(dock.__treats, `🍬${formatCount(treats.total)}`);
-      dock.__treats.title = `${formatCount(treats.total)} Halloween treats collected${treats.basket ? ` · ${huntBasketText(treats.basket)}` : ''}. Wear one scary clothing item and finish with a scary weapon for +10% each.`;
-    }
+    renderBasketRow(dock.__basket.row, dock.__basket.bar, dock.__basket.fill, dock.__basket.text);
 
     dock.__guard.hidden = !guard;
     if (guard) {
@@ -6556,6 +6562,74 @@
     return { tier: HUNT_BASKETS[index][0], chance: 35 + 5 * index, next: next ? { tier: next[0], at: next[1] } : null };
   }
 
+  // Progress inside the current step, as the basket page shows it ("100 / 250 Treats Collected"). The API's
+  // treats_collected is the lifetime total (checked against the basket page on 25 Oct 2026), so it maps onto the ladder.
+  function huntBasketProgress(total, basketName = '') {
+    const name = String(basketName || '').toLowerCase();
+    if (name.includes('apocalyptic')) return { tier: 'Apocalyptic', top: true };
+    let index = HUNT_BASKETS.findIndex(([tier]) => name.includes(tier.toLowerCase()));
+    if (index < 0) index = HUNT_BASKETS.reduce((best, [, at], i) => (total >= at ? i : best), 0);
+    const [tier, at] = HUNT_BASKETS[index];
+    const next = HUNT_BASKETS[index + 1] || null;
+    if (!next) return { tier, chance: 35 + 5 * index, top: true };
+    const stepSize = next[1] - at;
+    const inStep = Math.min(stepSize, Math.max(0, total - at));
+    return { tier, chance: 35 + 5 * index, next: next[0], inStep, stepSize, toGo: Math.max(0, next[1] - total), pct: inStep / stepSize };
+  }
+
+  function huntBasketLine(treats) {
+    const p = huntBasketProgress(treats.total, treats.basket);
+    if (p.top) return `🎃 ${p.tier} · top basket · 🍬${formatCount(treats.total)}`;
+    return `🎃 ${p.tier} ${formatCount(p.inStep)}/${formatCount(p.stepSize)} → ${p.next}`;
+  }
+
+  // Basket shortcut: open the items page, where initItemsPage scrolls to the basket and highlights it. The player taps
+  // Use; nothing is clicked for them. sessionStorage marks that this visit came from the shortcut.
+  const BASKET_JUMP_KEY = 'two.basketJump';
+
+  function makeBasketLink(className) {
+    const link = document.createElement('a');
+    link.className = className;
+    link.href = '/item.php';
+    link.textContent = 'Basket ▸';
+    link.setAttribute('aria-label', 'Open your Halloween basket on the items page');
+    link.addEventListener('click', () => {
+      try { sessionStorage.setItem(BASKET_JUMP_KEY, String(Date.now())); } catch { /* the page still opens */ }
+    });
+    return link;
+  }
+
+  function renderBasketRow(row, bar, fill, text) {
+    const treats = huntTreats;
+    row.hidden = !treats;
+    if (!treats) return;
+    const p = huntBasketProgress(treats.total, treats.basket);
+    setText(text, huntBasketLine(treats));
+    text.title = p.top
+      ? `${formatCount(treats.total)} treats earned all-time.`
+      : `${formatCount(treats.total)} treats earned all-time · ${p.tier}: ${p.chance}% base treat chance · ${formatCount(p.toGo)} more to ${p.next} (+5%).`;
+    bar.hidden = Boolean(p.top);
+    if (!p.top) fill.style.width = `${Math.round(p.pct * 100)}%`;
+  }
+
+  function makeBasketRow(prefix) {
+    const row = document.createElement('div');
+    row.className = `${prefix}-basket`;
+    const line = document.createElement('div');
+    line.className = 'two-basket-line';
+    const text = document.createElement('span');
+    text.className = 'two-basket-text';
+    line.append(text, makeBasketLink('two-basket-link'));
+    const bar = document.createElement('div');
+    bar.className = 'two-basket-bar';
+    const fill = document.createElement('div');
+    fill.className = 'two-basket-fill';
+    bar.appendChild(fill);
+    row.append(line, bar);
+    row.hidden = true;
+    return { row, bar, fill, text };
+  }
+
   function huntBasketText(basketName) {
     const info = huntBasketInfo(basketName);
     if (!info) return basketName || '';
@@ -6564,7 +6638,7 @@
 
   // Measured yield: treats gained today divided by fights finished since the first treat reading. 25 energy a fight.
   function huntTreatsLine(session) {
-    const head = `Treats: ${formatCount(huntTreats.total)} collected${huntTreats.basket ? ` · ${huntBasketText(huntTreats.basket)}` : ''}`;
+    const head = `Treats: ${formatCount(huntTreats.total)} earned all-time${huntTreats.basket ? ` · ${huntBasketText(huntTreats.basket)}` : ''}`;
     if (session.t0 === null) return `${head}.`;
     const gained = huntTreats.total - session.t0;
     if (session.ta <= 0) return `${head} · +${formatCount(gained)} today, no fights counted yet.`;
@@ -6945,6 +7019,7 @@
   }
 
   function renderAttackPanel() {
+    if (PAGE_MODE === 'home') { renderHomeCard(); return; }
     if (PAGE_MODE !== 'attack' || !attackTargetId || attackPanelHidden) return;
     if (huntState.enabled) {
       if (attackPanel) attackPanel.hidden = true;
@@ -7168,6 +7243,121 @@
     window.addEventListener('pageshow', () => resumeAttackPage());
   }
 
+  // ---------------------------------------------------------------------------
+  // Home page (v0.29): while hunt mode is on, a card docked at the bottom offers the next hunt target as one link to the
+  // attack page, with basket progress and the basket shortcut. It only re-checks the next target's status (at most
+  // HUNT_MAX_REVALIDATIONS requests); scanning for new targets stays on the attack page.
+  // ---------------------------------------------------------------------------
+
+  const HOME_HIDDEN_KEY = 'two.homeCardHidden';
+  let homeCard = null;
+  let homePickedAt = 0;
+
+  function ensureHomeCard() {
+    if (homeCard?.isConnected) return homeCard;
+    const card = document.createElement('div');
+    card.className = 'two-hunt-dock two-home-card';
+    card.setAttribute('role', 'region');
+    card.setAttribute('aria-label', 'Torn War Overlay hunt shortcut');
+    const top = document.createElement('div');
+    top.className = 'two-hd-top';
+    const title = document.createElement('span');
+    title.className = 'two-hd-name';
+    const energy = document.createElement('span');
+    energy.className = 'two-hd-energy';
+    const close = makeDockButton('two-hd-icon', '×', 'Hide until you next open Torn', () => {
+      try { sessionStorage.setItem(HOME_HIDDEN_KEY, '1'); } catch { /* hides for this page only */ }
+      card.hidden = true;
+    });
+    top.append(title, energy, close);
+    const basket = makeBasketRow('two-hd');
+    const link = document.createElement('a');
+    link.className = 'two-hd-next two-hd-next-hot two-home-next';
+    const linkMain = document.createElement('span');
+    linkMain.className = 'two-hd-next-main';
+    const linkSub = document.createElement('span');
+    linkSub.className = 'two-hd-next-sub';
+    link.append(linkMain, linkSub);
+    const waiting = document.createElement('div');
+    waiting.className = 'two-hd-next two-hd-next-wait two-home-next';
+    card.append(top, basket.row, link, waiting);
+    Object.assign(card, { __twoHomeCard: true, __title: title, __energy: energy, __basket: basket, __link: link, __linkMain: linkMain, __linkSub: linkSub, __waiting: waiting });
+    (document.body || document.documentElement).appendChild(card);
+    homeCard = card;
+    return card;
+  }
+
+  function renderHomeCard() {
+    if (PAGE_MODE !== 'home' || !huntState.enabled) return;
+    let hidden = false;
+    try { hidden = sessionStorage.getItem(HOME_HIDDEN_KEY) === '1'; } catch { /* show it */ }
+    if (hidden) return;
+    const card = ensureHomeCard();
+    updateHuntDockOffset(card);
+    const ready = huntConfirmedCount();
+    setText(card.__title, `HUNT · ${ready} ready`);
+    const hits = ownBars ? Math.floor(ownBars.energyCurrent / ENERGY_PER_ATTACK) : null;
+    setText(card.__energy, hits === null ? '⚡ –' : `⚡${hits}`);
+    card.__energy.classList.toggle('two-hd-energy-out', hits === 0);
+    renderBasketRow(card.__basket.row, card.__basket.bar, card.__basket.fill, card.__basket.text);
+    const showLink = Boolean(huntNext) && !huntPicking;
+    card.__link.hidden = !showLink;
+    card.__waiting.hidden = showLink;
+    if (showLink) {
+      card.__link.href = `/page.php?sid=attack&user2ID=${huntNext.userId}`;
+      setText(card.__linkMain, `ATTACK ▸ ${huntNext.name}${Number(huntNext.level) > 0 ? ` · L${huntNext.level}` : ''}`);
+      setText(card.__linkSub, hits !== null ? `⚡ ${hits} hit${hits === 1 ? '' : 's'} left · status checked just now` : 'status checked just now');
+    } else {
+      setText(card.__waiting, huntPicking ? 'Checking the next target…' : 'No free target yet: open any attack page to scan for more');
+    }
+  }
+
+  function homePickNext() {
+    if (document.hidden || Date.now() - homePickedAt < 30_000) return;
+    homePickedAt = Date.now();
+    huntPickNext();
+  }
+
+  async function initHomePage() {
+    if (!huntState.enabled) return;
+    renderHomeCard();
+    ensurePrimaryKeyInfo().catch(() => { /* optional */ });
+    refreshOwnBars().then(() => renderHomeCard()).catch(() => { /* handled inside */ });
+    refreshTreats().catch(() => { /* handled inside */ });
+    homePickNext();
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) homePickNext(); });
+    window.addEventListener('pagehide', () => flushPersistentState());
+  }
+
+  // Items page: arrived through the basket shortcut within the last minute, so find the basket row, scroll to it and
+  // highlight it. Torn loads the list after the page, so look for up to 10 s. Never clicks anything.
+  function findBasketRow() {
+    for (const li of document.querySelectorAll('li[data-item], ul.items-cont > li, li')) {
+      const text = li.textContent || '';
+      if (/Halloween Basket/i.test(text) && text.length < 400) return li;
+    }
+    return null;
+  }
+
+  function initItemsPage() {
+    let at = 0;
+    try { at = Number(sessionStorage.getItem(BASKET_JUMP_KEY)) || 0; sessionStorage.removeItem(BASKET_JUMP_KEY); } catch { return; }
+    if (!at || Date.now() - at > 60_000) return;
+    const deadline = Date.now() + 10_000;
+    const look = () => {
+      const row = findBasketRow();
+      if (row) {
+        row.classList.add('two-basket-hit');
+        try { row.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch { row.scrollIntoView(); }
+        pdaToast('Your Halloween basket: tap it, then Use', 'info', 4);
+        return;
+      }
+      if (Date.now() > deadline) { pdaToast('Basket not in this list: open the Special Items tab', 'warn', 6); return; }
+      setTimeout(look, 400);
+    };
+    look();
+  }
+
   async function init() {
     injectStyles();
     prunePersistentCaches();
@@ -7190,6 +7380,8 @@
       await initAttackPage();
       return;
     }
+    if (PAGE_MODE === 'home') { await initHomePage(); return; }
+    if (PAGE_MODE === 'items') { initItemsPage(); return; }
 
     installNavigationHooks();
     try { window.__TWO_DIAGNOSTICS__ = getDiagnosticSnapshot; } catch { /* optional debug hook */ }

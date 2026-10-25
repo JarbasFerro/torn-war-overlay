@@ -4,6 +4,13 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.29.0 - Hunt from the home page, basket progress and basket shortcut
+
+- Home page: while hunt mode is on, a card docked at the bottom of Torn's home page shows `ATTACK ▸ Name`, which opens the next hunt target's attack page in one tap, plus how many targets are ready and your energy as hits. Before offering a target it re-checks that player's status (at most 4 requests); scanning for new targets still happens only on the attack page. `×` hides the card until you next open Torn.
+- Basket progress, always visible on the hunt dock and the home card, in the same format as the basket page: `🎃 Shocking 100/250 → Terrifying` with a progress bar. Tap or hover for the lifetime total, your base treat chance and how many more treats the next basket needs. It replaces the bare `🍬` total, which was easy to mistake for spendable treats. The API's treat count is the lifetime total (checked against the basket page), so the step maths matches the game.
+- `Basket ▸` opens your items page, scrolls to the Halloween basket and highlights it; you tap it and `Use` yourself. If the basket is not in the list that loaded, a Torn PDA toast says to open the Special Items tab. The script never clicks anything for you.
+- The script now also runs on `index.php` (home) and `item.php` (items). On the items page it does nothing unless you arrived through `Basket ▸` within the last minute.
+
 ## 0.28.1 - Attack links go straight to page.php
 
 - The hunt dock's `NEXT`/`Skip`, the war panel's next-target link and the explain sheet's attack button now open `page.php?sid=attack`. Torn has retired `loader.php` for attacks, so the old links showed "This endpoint is no longer available" and a redirect toast in Torn PDA before the attack page loaded.

@@ -10,7 +10,8 @@
 //      script runs from it and later writes land there; a failing or mismatching store keeps localStorage untouched;
 //   6. Torn PDA app bridge: a background tab (PDA_getTabState says inactive) makes no hunt requests until the tab
 //      becomes active, the storage move shows a native toast, and the userscript menu mirrors the tools list;
-//   7. an unrelated page: the script does not run.
+//   7. the home page shows the hunt card only while hunting; the items page runs quietly;
+//   8. an unrelated page: the script does not run.
 // Run: node tools/smoke-test.mjs
 
 import { readFileSync } from 'node:fs';
@@ -110,7 +111,7 @@ async function boot({ pathname, search, seed = {}, fetchImpl = null, waitMs = 15
   vm.createContext(sandbox);
   vm.runInContext(source, sandbox, { filename: 'torn-war-overlay.user.js' });
   await new Promise(resolve => setTimeout(resolve, waitMs));
-  return { errors, warnings, promptCalls, storage, menu, mounted: body.children.length, panel: body.children.find(node => node.__twoName) || null, dock: body.children.find(node => node.__twoHuntDock) || null };
+  return { errors, warnings, promptCalls, storage, menu, mounted: body.children.length, panel: body.children.find(node => node.__twoName) || null, dock: body.children.find(node => node.__twoHuntDock) || null, home: body.children.find(node => node.__twoHomeCard) || null };
 }
 
 let failed = false;
@@ -160,7 +161,7 @@ const huntFetch = (url, options) => {
     return Promise.resolve({ status: 200, text: () => Promise.resolve(JSON.stringify(limited ? { bars: { energy: { current: 100, maximum: 150, full_time: 0 } } } : { error: { code: 16, error: 'Access level of this key is not high enough' } })) });
   }
   if (String(url).includes('/user/competition')) {
-    return Promise.resolve({ status: 200, text: () => Promise.resolve(JSON.stringify({ competition: { name: 'Halloween', treats_collected: 1234, basket: { id: 1003, name: 'Creepy Basket' } } })) });
+    return Promise.resolve({ status: 200, text: () => Promise.resolve(JSON.stringify({ competition: { name: 'Halloween', treats_collected: 1234, basket: { id: 1009, name: 'Horrifying Basket' } } })) });
   }
   if (String(url).includes('/faction/50/members')) {
     const members = [{ id: 2001, name: 'Ghost', level: 3, status: { state: 'Okay' }, last_action: { timestamp: nowSec - 86400 } }];
@@ -198,11 +199,33 @@ if (!dock?.__link || dock.__link.hidden || !String(dock.__link.href || '').start
   failed = true; console.error('Hunt mode: dock NEXT button for the refreshed target missing', dock?.__linkMain?.textContent, dock?.__link?.href);
 }
 if (!/^\d+$/.test(dock?.__pumpCount?.textContent || '')) { failed = true; console.error('Hunt mode: ready count missing on the hunt button'); }
-if (dock?.__treats?.hidden || dock?.__treats?.textContent !== '🍬1,234') { failed = true; console.error('Hunt mode: treat counter from /user/competition missing', dock?.__treats?.textContent); }
-if (!/^If you win: Leave, and land the last hit with a scary weapon$/.test(dock?.__hint?.textContent || '')) { failed = true; console.error('Hunt mode: Halloween finish hint missing', dock?.__hint?.textContent); }
-if (!/Creepy basket: 40% base chance, next Freaky at 15 attack treats/.test(dock?.__treats?.title || '')) { failed = true; console.error('Hunt mode: basket chance and next tier missing', dock?.__treats?.title); }
+if (dock?.__basket?.row?.hidden || dock?.__basket?.text?.textContent !== '🎃 Horrifying 294/1,000 → Petrifying') { failed = true; console.error('Hunt mode: basket progress line missing', dock?.__basket?.text?.textContent); }
+if (!/706 more to Petrifying/.test(dock?.__basket?.text?.title || '')) { failed = true; console.error('Hunt mode: basket progress tooltip missing', dock?.__basket?.text?.title); }
 if (huntSaved.session?.t0 !== 1234) { failed = true; console.error('Hunt mode: treat baseline not saved in the session', huntSaved.session); }
 if (dock?.__energy?.textContent !== '⚡4') { failed = true; console.error('Hunt mode: energy should be read with the Limited key (100 energy = 4 hits)', dock?.__energy?.textContent, dock?.__energy?.title); }
+
+// Home page: with hunt mode on, a docked card offers the next pool target as one link to page.php.
+const homeNow = Math.floor(Date.now() / 1000);
+const home = await boot({
+  pathname: '/index.php',
+  search: '',
+  seed: {
+    'two.apiKey.v1': 'ABCDEFGHIJKLMNOP',
+    'two.attackApiKey.v1': 'LIMITEDKEYLIMITE',
+    'two.hunt.v1': JSON.stringify({ enabled: true, dir: 'up', cursor: 1003, pool: { 2001: { n: 'Ghost', l: 3, w: 'r', r: 0.01, s: 'o', t: 0, c: homeNow, f: 50 } } }),
+  },
+  fetchImpl: huntFetch,
+  waitMs: 1_500,
+});
+if (home.errors.length > 0) { failed = true; console.error('HOME ERRORS:', home.errors.join('\n')); }
+if (!home.home || home.home.__link.hidden || home.home.__link.href !== '/page.php?sid=attack&user2ID=2001' || !/^ATTACK ▸ Ghost · L3$/.test(home.home.__linkMain.textContent)) {
+  failed = true; console.error('Home: card with the next hunt target missing', home.home?.__linkMain?.textContent, home.home?.__link?.href);
+}
+if (home.home?.__basket?.text?.textContent !== '🎃 Horrifying 294/1,000 → Petrifying') { failed = true; console.error('Home: basket progress missing', home.home?.__basket?.text?.textContent); }
+const homeOff = await boot({ pathname: '/index.php', search: '', seed: { 'two.apiKey.v1': 'ABCDEFGHIJKLMNOP', 'two.hunt.v1': JSON.stringify({ enabled: false, pool: {} }) }, fetchImpl: huntFetch, waitMs: 300 });
+if (homeOff.home || homeOff.errors.length > 0) { failed = true; console.error('Home: no card (and no errors) while hunt mode is off', homeOff.errors); }
+const items = await boot({ pathname: '/item.php', search: '', seed: { 'two.apiKey.v1': 'ABCDEFGHIJKLMNOP' }, waitMs: 300 });
+if (items.errors.length > 0) { failed = true; console.error('ITEMS ERRORS:', items.errors.join('\n')); }
 
 // Torn PDA native storage, modelled on userscripts/TornPDA_Storage.md: async, JSON values, setMany/getMany batches.
 function makePdaStorage({ failLoad = false, corruptReadBack = false } = {}) {
@@ -287,7 +310,7 @@ if (backgroundWork.length > 0) { failed = true; console.error('PDA tab: a backgr
 
 if (faction.menu.length < 10 || !faction.menu.includes('Torn War Overlay: Clear hunt list') || !faction.menu.includes('Torn War Overlay: open tools')) { failed = true; console.error('Menu should mirror the tools list', faction.menu); }
 
-const other = await boot({ pathname: '/index.php', search: '' });
+const other = await boot({ pathname: '/profiles.php', search: '?XID=1' });
 if (other.promptCalls !== 0 || other.errors.length > 0) { failed = true; console.error('Unrelated page: script should not run'); }
 
 console.log(failed ? 'SMOKE TEST FAILED' : `SMOKE TEST OK (faction warnings: ${faction.warnings.length}, attack warnings: ${attack.warnings.length + attackWithKey.warnings.length}, hunt warnings: ${hunt.warnings.length}, pda warnings: ${pda.warnings.length})`);
