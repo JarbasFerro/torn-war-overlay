@@ -159,6 +159,9 @@ const huntFetch = (url, options) => {
     const limited = String(options?.headers?.Authorization || '').includes('LIMITEDKEYLIMITE');
     return Promise.resolve({ status: 200, text: () => Promise.resolve(JSON.stringify(limited ? { bars: { energy: { current: 100, maximum: 150, full_time: 0 } } } : { error: { code: 16, error: 'Access level of this key is not high enough' } })) });
   }
+  if (String(url).includes('/user/competition')) {
+    return Promise.resolve({ status: 200, text: () => Promise.resolve(JSON.stringify({ competition: { name: 'Halloween', treats_collected: 1234, basket: { id: 1003, name: 'Creepy Basket' } } })) });
+  }
   if (String(url).includes('/faction/50/members')) {
     const members = [{ id: 2001, name: 'Ghost', level: 3, status: { state: 'Okay' }, last_action: { timestamp: nowSec - 86400 } }];
     return Promise.resolve({ status: 200, text: () => Promise.resolve(JSON.stringify({ members })) });
@@ -195,6 +198,9 @@ if (!dock?.__link || dock.__link.hidden || !String(dock.__link.href || '').inclu
   failed = true; console.error('Hunt mode: dock NEXT button for the refreshed target missing', dock?.__linkMain?.textContent, dock?.__link?.href);
 }
 if (!/^\d+$/.test(dock?.__pumpCount?.textContent || '')) { failed = true; console.error('Hunt mode: ready count missing on the hunt button'); }
+if (dock?.__treats?.hidden || dock?.__treats?.textContent !== '🍬1,234') { failed = true; console.error('Hunt mode: treat counter from /user/competition missing', dock?.__treats?.textContent); }
+if (!/^If you win: Leave, and land the last hit with a scary weapon$/.test(dock?.__hint?.textContent || '')) { failed = true; console.error('Hunt mode: Halloween finish hint missing', dock?.__hint?.textContent); }
+if (huntSaved.session?.t0 !== 1234) { failed = true; console.error('Hunt mode: treat baseline not saved in the session', huntSaved.session); }
 if (dock?.__energy?.textContent !== '⚡4') { failed = true; console.error('Hunt mode: energy should be read with the Limited key (100 energy = 4 hits)', dock?.__energy?.textContent, dock?.__energy?.title); }
 
 // Torn PDA native storage, modelled on userscripts/TornPDA_Storage.md: async, JSON values, setMany/getMany batches.

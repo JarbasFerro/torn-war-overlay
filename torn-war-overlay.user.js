@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.26.0
+// @version      0.27.0
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling, plus a hunt mode that scans for easy wins.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -34,7 +34,7 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const SCRIPT_VERSION = '0.26.0';
+  const SCRIPT_VERSION = '0.27.0';
   const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0260__';
   if (window[INSTANCE_KEY]) {
     console.warn(`[${SCRIPT}] v0.26.0 is already running; duplicate injection ignored.`);
@@ -4919,215 +4919,228 @@
     const style = document.createElement('style');
     style.id = 'two-styles';
     style.textContent = `
+      /* Design tokens: shared with Market Edge (docs/DESIGN.md). Do not hand-tune values here. */
+      body { --two-bg:#ffffff; --two-bg-2:#f3f3f4; --two-fg:#1f1f21; --two-muted:#5b5f66; --two-faint:#8a8f97; --two-border:rgba(0,0,0,.14); --two-strip:rgba(0,0,0,.045); --two-strip-border:rgba(0,0,0,.10); --two-good:#1d7a3b; --two-warn:#8a5a00; --two-bad:#a83a3a; --two-good-bg:rgba(29,122,59,.10); --two-warn-bg:rgba(184,124,0,.12); --two-bad-bg:rgba(168,58,58,.10); --two-btn:rgba(0,0,0,.06); --two-btn-hover:rgba(0,0,0,.12); --two-btn-border:rgba(0,0,0,.18); --two-on-good:#ffffff; --two-shadow:0 6px 20px rgba(0,0,0,.18);
+        --two-font:Arial, "Helvetica Neue", sans-serif; --two-fs-xxs:8px; --two-fs-xs:10px; --two-fs-sm:11px; --two-fs-md:12px; --two-fs-lg:13px; --two-fs-xl:15px;
+        --two-s1:2px; --two-s2:4px; --two-s3:6px; --two-s4:8px; --two-s5:12px; --two-ctl-sm:22px; --two-ctl:26px; --two-hit:4px; --two-r-sm:3px; --two-r:5px; --two-r-lg:7px; --two-edge:3px; }
+      body.dark-mode { --two-bg:#242426; --two-bg-2:#1c1c1e; --two-fg:#e9e9e9; --two-muted:#b3b3b3; --two-faint:#8a8a8a; --two-border:rgba(255,255,255,.14); --two-strip:rgba(0,0,0,.28); --two-strip-border:rgba(255,255,255,.08); --two-good:#7fd193; --two-warn:#f0ca66; --two-bad:#e27a7a; --two-good-bg:rgba(74,165,100,.18); --two-warn-bg:rgba(211,170,66,.16); --two-bad-bg:rgba(189,81,81,.16); --two-btn:rgba(255,255,255,.10); --two-btn-hover:rgba(255,255,255,.18); --two-btn-border:rgba(255,255,255,.22); --two-on-good:#0d1a10; --two-shadow:0 6px 20px rgba(0,0,0,.45); }
+      @media (pointer: coarse) { body { --two-hit:7px; } }
+
       .two-target-toolbar {
         display:flex; align-items:center; justify-content:space-between; gap:6px; width:100%; min-height:29px;
-        box-sizing:border-box; padding:3px 6px; border-top:1px solid rgba(255,255,255,.08);
-        border-bottom:1px solid rgba(0,0,0,.55); background:linear-gradient(to bottom,rgba(57,57,57,.98),rgba(38,38,38,.98));
-        color:#d8d8d8; font-family:Arial,sans-serif; position:relative; z-index:25;
+        box-sizing:border-box; padding:3px 6px; border-top:1px solid var(--two-strip-border);
+        border-bottom:1px solid var(--two-border); background:var(--two-bg);
+        color:var(--two-fg); font-family:var(--two-font); position:relative; z-index:25;
       }
-      .two-mode-group { display:flex; flex-wrap:nowrap; align-items:center; flex-shrink:0; border:1px solid rgba(255,255,255,.15); border-radius:4px; overflow:hidden; background:rgba(0,0,0,.18); max-width:100%; }
-      .two-mode-btn { appearance:none; -webkit-appearance:none; min-height:22px; margin:0; padding:2px 8px; border:0; border-right:1px solid rgba(255,255,255,.12); border-radius:0; background:transparent; color:#aaa; font:800 9px/1 Arial,sans-serif; letter-spacing:.25px; cursor:pointer; touch-action:manipulation; }
+      .two-mode-group { display:flex; flex-wrap:nowrap; align-items:center; flex-shrink:0; border:1px solid var(--two-btn-border); border-radius:var(--two-r); overflow:hidden; background:var(--two-strip); max-width:100%; }
+      .two-mode-btn { appearance:none; -webkit-appearance:none; min-height:22px; margin:0; padding:2px 8px; border:0; border-right:1px solid var(--two-strip-border); border-radius:0; background:transparent; color:var(--two-muted); font:800 var(--two-fs-xxs)/1 var(--two-font); letter-spacing:.25px; cursor:pointer; touch-action:manipulation; }
       .two-mode-btn:last-child { border-right:0; }
-      .two-mode-btn.two-active { background:rgba(255,255,255,.13); color:#fff; box-shadow:inset 0 -2px 0 rgba(220,220,220,.65); }
-      .two-mode-btn.two-filter-live { color:#ffe38a; }
+      .two-mode-btn.two-active { background:var(--two-btn-hover); color:var(--two-fg); box-shadow:inset 0 -2px 0 var(--two-muted); }
+      .two-mode-btn.two-filter-live { color:var(--two-warn); }
       .two-target-toolbar { flex-direction:column; align-items:stretch; }
       .two-toolbar-row { display:flex; align-items:center; justify-content:space-between; gap:6px; width:100%; min-width:0; }
-      .two-filter-bar { display:flex; flex-wrap:wrap; align-items:center; gap:4px 10px; margin-top:3px; padding-top:3px; border-top:1px solid rgba(255,255,255,.08); }
+      .two-filter-bar { display:flex; flex-wrap:wrap; align-items:center; gap:4px 10px; margin-top:3px; padding-top:3px; border-top:1px solid var(--two-strip-border); }
       .two-filter-bar[hidden] { display:none !important; }
       .two-filter-group { display:inline-flex; align-items:center; gap:3px; }
-      .two-filter-label { color:#999; font:800 7px/1 Arial,sans-serif; letter-spacing:.2px; text-transform:uppercase; margin-right:2px; }
-      .two-filter-chip { appearance:none; -webkit-appearance:none; min-height:20px; margin:0; padding:2px 6px; border-radius:10px; border:1px solid rgba(255,255,255,.18); background:rgba(0,0,0,.25); color:#777; font:800 8px/1 Arial,sans-serif; letter-spacing:.2px; cursor:pointer; touch-action:manipulation; text-decoration:line-through; }
-      .two-filter-chip.two-active { color:#eee; background:rgba(255,255,255,.14); border-color:rgba(255,255,255,.35); text-decoration:none; }
-      .two-filter-chip.two-filter-reset { color:#ffe38a; text-decoration:none; border-color:rgba(255,205,61,.5); }
-      .two-hosp-badge.two-out-early { color:#fff7d1; border-color:rgba(255,224,102,.98); background:rgba(92,70,8,.96); min-width:52px; animation:two-chip-pulse 1s ease-in-out infinite alternate; }
-      .two-target-toolbar.two-targets-mode .two-mode-btn[data-two-mode='targets'].two-active { color:#eaffd5; background:rgba(58,100,22,.45); box-shadow:inset 0 -2px 0 rgba(137,255,67,.90); }
+      .two-filter-label { color:var(--two-muted); font:800 var(--two-fs-xxs)/1 var(--two-font); letter-spacing:.2px; text-transform:uppercase; margin-right:2px; }
+      .two-filter-chip { appearance:none; -webkit-appearance:none; min-height:20px; margin:0; padding:2px 6px; border-radius:var(--two-r-lg); border:1px solid var(--two-btn-border); background:var(--two-strip); color:var(--two-faint); font:800 var(--two-fs-xxs)/1 var(--two-font); letter-spacing:.2px; cursor:pointer; touch-action:manipulation; text-decoration:line-through; }
+      .two-filter-chip.two-active { color:var(--two-fg); background:var(--two-btn-hover); border-color:var(--two-btn-border); text-decoration:none; }
+      .two-filter-chip.two-filter-reset { color:var(--two-warn); text-decoration:none; border-color:var(--two-warn); }
+      .two-hosp-badge.two-out-early { color:var(--two-warn); border-color:var(--two-warn); background:var(--two-warn-bg); min-width:52px; animation:two-chip-pulse 1s ease-in-out infinite alternate; }
+      .two-target-toolbar.two-targets-mode .two-mode-btn[data-two-mode='targets'].two-active { color:var(--two-good); background:var(--two-good-bg); box-shadow:inset 0 -2px 0 var(--two-good); }
       .two-toolbar-right { display:inline-flex; align-items:center; gap:8px; min-width:0; flex-wrap:wrap; justify-content:flex-end; }
-      .two-history-key-btn { appearance:none; -webkit-appearance:none; margin:0; padding:2px 4px; min-height:18px; border-radius:3px; border:1px solid rgba(255,194,64,.62); background:rgba(83,61,8,.62); color:#ffe38a; font:800 7px/1 Arial,sans-serif; letter-spacing:.1px; cursor:pointer; touch-action:manipulation; }
+      .two-history-key-btn { appearance:none; -webkit-appearance:none; margin:0; padding:2px 4px; min-height:18px; border-radius:var(--two-r-sm); border:1px solid var(--two-warn); background:var(--two-warn-bg); color:var(--two-warn); font:800 var(--two-fs-xxs)/1 var(--two-font); letter-spacing:.1px; cursor:pointer; touch-action:manipulation; }
       .two-history-key-btn[hidden] { display:none !important; }
-      .two-sync-indicator { white-space:nowrap; padding:2px 4px; border-radius:3px; border:1px solid rgba(255,255,255,.16); background:rgba(0,0,0,.20); font:800 7px/1 Arial,sans-serif; letter-spacing:.15px; font-variant-numeric:tabular-nums; }
-      .two-sync-indicator.two-live { color:#c9ffa0; border-color:rgba(137,255,67,.45); background:rgba(37,70,17,.45); }
-      .two-sync-indicator.two-syncing { color:#d7d7d7; }
-      .two-sync-indicator.two-rate { color:#ffe38a; border-color:rgba(255,205,61,.55); background:rgba(83,61,8,.55); }
-      .two-sync-indicator.two-error, .two-sync-indicator.two-key { color:#ffaaa0; border-color:rgba(255,95,78,.6); background:rgba(75,24,18,.58); }
-      .two-target-counter { display:inline-flex; align-items:center; gap:9px; padding-right:2px; white-space:nowrap; font:800 10px/1 Arial,sans-serif; font-variant-numeric:tabular-nums; }
+      .two-sync-indicator { white-space:nowrap; padding:2px 4px; border-radius:var(--two-r-sm); border:1px solid var(--two-strip-border); background:var(--two-strip); font:800 var(--two-fs-xxs)/1 var(--two-font); letter-spacing:.15px; font-variant-numeric:tabular-nums; }
+      .two-sync-indicator.two-live { color:var(--two-good); border-color:var(--two-good); background:var(--two-good-bg); }
+      .two-sync-indicator.two-syncing { color:var(--two-fg); }
+      .two-sync-indicator.two-rate { color:var(--two-warn); border-color:var(--two-warn); background:var(--two-warn-bg); }
+      .two-sync-indicator.two-error, .two-sync-indicator.two-key { color:var(--two-bad); border-color:var(--two-bad); background:var(--two-bad-bg); }
+      .two-target-counter { display:inline-flex; align-items:center; gap:9px; padding-right:2px; white-space:nowrap; font:800 var(--two-fs-xs)/1 var(--two-font); font-variant-numeric:tabular-nums; }
       .two-counter-item { display:inline-flex; align-items:center; gap:3px; min-width:22px; }
       .two-counter-dot { display:inline-block; width:7px; height:7px; flex:0 0 7px; border-radius:50%; }
-      .two-counter-green { background:#8dff49; box-shadow:0 0 4px rgba(137,255,67,.55); }
-      .two-counter-yellow { background:#ffd23f; box-shadow:0 0 4px rgba(255,205,61,.45); }
-      .two-counter-number { color:#eee; }
+      .two-counter-green { background:var(--two-good); }
+      .two-counter-yellow { background:var(--two-warn); }
+      .two-counter-number { color:var(--two-fg); }
 
       ul.members-list li.two-target-hidden { display:none !important; }
       ul.members-list li .member, ul.members-list li .status { position:relative !important; }
 
       .two-member-meta { position:absolute; right:4px; bottom:2px; z-index:20; display:inline-flex; align-items:center; justify-content:flex-end; gap:2px; max-width:94%; pointer-events:auto; cursor:pointer; touch-action:manipulation; white-space:nowrap; }
       .two-attack-history { display:inline-flex; align-items:center; gap:2px; min-width:0; }
-      .two-attack-dot { display:inline-block; width:6px; height:6px; flex:0 0 6px; border-radius:50%; box-shadow:0 0 0 1px rgba(0,0,0,.28), 0 0 3px rgba(0,0,0,.18); }
-      .two-attack-dot.two-attack-win { background:#7dff57; }
-      .two-attack-dot.two-attack-loss { background:#ff7468; }
-      .two-attack-dot.two-attack-stalemate { background:#9a9a9a; }
-      .two-intel-badge { position:relative; pointer-events:none; white-space:nowrap; box-sizing:border-box; padding:1px 3px; border-radius:3px; border:1px solid rgba(255,255,255,.18); background:rgba(18,18,18,.78); color:#cfcfcf; font:800 7.5px/1.15 Arial,sans-serif; font-variant-numeric:tabular-nums; letter-spacing:-.1px; box-shadow:0 1px 2px rgba(0,0,0,.35); }
+      .two-attack-dot { display:inline-block; width:6px; height:6px; flex:0 0 6px; border-radius:50%; box-shadow:0 0 0 1px var(--two-strip-border); }
+      .two-attack-dot.two-attack-win { background:var(--two-good); }
+      .two-attack-dot.two-attack-loss { background:var(--two-bad); }
+      .two-attack-dot.two-attack-stalemate { background:var(--two-faint); }
+      .two-intel-badge { position:relative; pointer-events:none; white-space:nowrap; box-sizing:border-box; padding:1px 3px; border-radius:var(--two-r-sm); border:1px solid var(--two-strip-border); background:var(--two-strip); color:var(--two-fg); font:800 var(--two-fs-xxs)/1.15 var(--two-font); font-variant-numeric:tabular-nums; letter-spacing:-.1px; }
       .two-intel-badge[hidden] { display:none !important; }
-      .two-intel-badge.two-intel-proven { color:#d6ff9b; border-color:rgba(151,220,75,.62); background:rgba(28,48,13,.86); }
-      .two-intel-badge.two-intel-likely { color:#e8f7b3; border-color:rgba(204,235,116,.55); background:rgba(54,63,22,.84); }
-      .two-intel-badge.two-intel-risk { color:#ffb1a6; border-color:rgba(255,95,78,.62); background:rgba(75,24,18,.84); }
-      .two-intel-badge.two-intel-changed { color:#ffd36a; border-color:rgba(255,193,64,.75); background:rgba(55,40,10,.88); }
-      .two-intel-badge.two-intel-easy { color:#bfe8c4; border-color:rgba(140,200,150,.55); background:rgba(22,44,26,.84); }
-      .two-intel-badge.two-intel-good { color:#d6ff9b; border-color:rgba(151,220,75,.70); background:rgba(28,48,13,.88); }
-      .two-intel-badge.two-intel-risky { color:#ffd36a; border-color:rgba(255,193,64,.75); background:rgba(55,40,10,.88); }
-      .two-intel-badge.two-intel-avoid { color:#ffb1a6; border-color:rgba(255,95,78,.70); background:rgba(75,24,18,.88); }
+      .two-intel-badge.two-intel-proven { color:var(--two-good); border-color:var(--two-good); background:var(--two-good-bg); }
+      .two-intel-badge.two-intel-likely { color:var(--two-good); border-color:var(--two-strip-border); background:var(--two-good-bg); }
+      .two-intel-badge.two-intel-risk { color:var(--two-bad); border-color:var(--two-bad); background:var(--two-bad-bg); }
+      .two-intel-badge.two-intel-changed { color:var(--two-warn); border-color:var(--two-warn); background:var(--two-warn-bg); }
+      .two-intel-badge.two-intel-easy { color:var(--two-good); border-color:var(--two-strip-border); background:var(--two-good-bg); }
+      .two-intel-badge.two-intel-good { color:var(--two-good); border-color:var(--two-good); background:var(--two-good-bg); }
+      .two-intel-badge.two-intel-risky { color:var(--two-warn); border-color:var(--two-warn); background:var(--two-warn-bg); }
+      .two-intel-badge.two-intel-avoid { color:var(--two-bad); border-color:var(--two-bad); background:var(--two-bad-bg); }
       .two-intel-badge.two-intel-estimated { border-style:dashed; }
-      .two-intel-badge.two-intel-best { color:#fff7d1; border-color:rgba(255,224,102,.98); background:rgba(92,70,8,.96); box-shadow:0 0 6px rgba(255,214,64,.55),0 1px 2px rgba(0,0,0,.45); }
-      ul.members-list li.two-best-target { outline:2px solid rgba(255,224,102,.92) !important; outline-offset:-2px; }
-      ul.members-list li.two-best-target .member { box-shadow:inset 4px 0 0 rgba(255,224,102,1),inset 0 0 22px rgba(255,200,40,.14) !important; }
-      .two-context-chip { white-space:nowrap; padding:2px 4px; border-radius:3px; border:1px solid rgba(255,255,255,.16); background:rgba(0,0,0,.20); color:#d7d7d7; font:800 7px/1 Arial,sans-serif; letter-spacing:.15px; font-variant-numeric:tabular-nums; }
+      .two-intel-badge.two-intel-best { color:var(--two-on-good); border-color:var(--two-good); background:var(--two-good); }
+      ul.members-list li.two-best-target { outline:2px solid var(--two-good) !important; outline-offset:-2px; }
+      ul.members-list li.two-best-target .member { box-shadow:inset 4px 0 0 var(--two-good) !important; }
+      .two-context-chip { white-space:nowrap; padding:2px 4px; border-radius:var(--two-r-sm); border:1px solid var(--two-strip-border); background:var(--two-strip); color:var(--two-fg); font:800 var(--two-fs-xxs)/1 var(--two-font); letter-spacing:.15px; font-variant-numeric:tabular-nums; }
       .two-context-chip[hidden] { display:none !important; }
-      .two-context-chip.two-chip-positive { color:#c9ffa0; border-color:rgba(137,255,67,.45); background:rgba(37,70,17,.45); }
-      .two-context-chip.two-chip-negative { color:#ffaaa0; border-color:rgba(255,95,78,.55); background:rgba(75,24,18,.5); }
-      .two-context-chip.two-chip-urgent { color:#ffe38a; border-color:rgba(255,205,61,.6); background:rgba(83,61,8,.55); }
-      .two-context-chip.two-chip-hosp { color:#ffb1a6; border-color:rgba(255,95,78,.6); background:rgba(75,24,18,.55); }
-      .two-context-chip.two-chip-leave { color:#c9ffa0; border-color:rgba(137,255,67,.45); background:rgba(37,70,17,.45); }
-      .two-context-chip.two-chip-bonus { color:#fff7d1; border-color:rgba(255,224,102,.95); background:rgba(92,70,8,.9); animation:two-chip-pulse 1s ease-in-out infinite alternate; }
+      .two-context-chip.two-chip-positive { color:var(--two-good); border-color:var(--two-good); background:var(--two-good-bg); }
+      .two-context-chip.two-chip-negative { color:var(--two-bad); border-color:var(--two-bad); background:var(--two-bad-bg); }
+      .two-context-chip.two-chip-urgent { color:var(--two-warn); border-color:var(--two-warn); background:var(--two-warn-bg); }
+      .two-context-chip.two-chip-hosp { color:var(--two-bad); border-color:var(--two-bad); background:var(--two-bad-bg); }
+      .two-context-chip.two-chip-leave { color:var(--two-good); border-color:var(--two-good); background:var(--two-good-bg); }
+      .two-context-chip.two-chip-bonus { color:var(--two-warn); border-color:var(--two-warn); background:var(--two-warn-bg); animation:two-chip-pulse 1s ease-in-out infinite alternate; }
 
-      .two-attack-panel { position:fixed; top:calc(env(safe-area-inset-top, 0px) + 54px); right:6px; z-index:99999; max-width:min(92vw,420px); box-sizing:border-box; padding:4px 6px; border-radius:6px; border:1px solid rgba(255,255,255,.18); background:rgba(24,24,24,.94); color:#ddd; font:700 10px/1.3 Arial,sans-serif; box-shadow:0 2px 10px rgba(0,0,0,.5); pointer-events:auto; }
+      .two-attack-panel { position:fixed; top:calc(env(safe-area-inset-top, 0px) + 54px); right:6px; z-index:99999; max-width:min(92vw,420px); box-sizing:border-box; padding:4px 6px; border-radius:var(--two-r-lg); border:1px solid var(--two-border); border-left:var(--two-edge) solid var(--two-strip-border); background:var(--two-bg); color:var(--two-fg); font:700 var(--two-fs-xs)/1.3 var(--two-font); box-shadow:var(--two-shadow); pointer-events:auto; }
       .two-attack-panel[hidden] { display:none !important; }
       .two-attack-head { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
-      .two-attack-name { color:#fff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:40vw; }
-      .two-attack-panel .two-intel-badge { font-size:9px; pointer-events:none; }
-      .two-attack-status { white-space:nowrap; padding:2px 5px; border-radius:3px; border:1px solid rgba(255,255,255,.16); background:rgba(0,0,0,.25); font-variant-numeric:tabular-nums; }
-      .two-attack-status-okay { color:#c9ffa0; border-color:rgba(137,255,67,.5); background:rgba(37,70,17,.5); }
-      .two-attack-status-hospital { color:#ff9b8f; border-color:rgba(255,95,78,.55); background:rgba(35,15,13,.7); }
-      .two-attack-status-soon { color:#ffd36a; border-color:rgba(255,193,64,.8); background:rgba(55,40,10,.86); }
-      .two-attack-status-due { color:#c6ff84; border-color:rgba(123,255,74,.95); background:rgba(36,72,10,.9); }
-      .two-attack-status-away { color:#bfc8d0; }
-      .two-attack-toggle { appearance:none; -webkit-appearance:none; width:20px; height:20px; margin:0; padding:0; border-radius:50%; border:1px solid rgba(255,255,255,.25); background:rgba(255,255,255,.08); color:#ddd; font:800 11px/1 Arial,sans-serif; cursor:pointer; touch-action:manipulation; }
-      .two-attack-next { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:4px; padding-top:4px; border-top:1px solid rgba(255,255,255,.12); }
+      .two-attack-name { color:var(--two-fg); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:40vw; }
+      .two-attack-panel .two-intel-badge { font-size:var(--two-fs-xxs); pointer-events:none; }
+      .two-attack-status { white-space:nowrap; padding:2px 5px; border-radius:var(--two-r-sm); border:1px solid var(--two-strip-border); background:var(--two-strip); font-variant-numeric:tabular-nums; }
+      .two-attack-status-okay { color:var(--two-good); border-color:var(--two-good); background:var(--two-good-bg); }
+      .two-attack-status-hospital { color:var(--two-bad); border-color:var(--two-bad); background:var(--two-bad-bg); }
+      .two-attack-status-soon { color:var(--two-warn); border-color:var(--two-warn); background:var(--two-warn-bg); }
+      .two-attack-status-due { color:var(--two-good); border-color:var(--two-good); background:var(--two-good-bg); }
+      .two-attack-status-away { color:var(--two-muted); }
+      .two-attack-toggle { appearance:none; -webkit-appearance:none; width:20px; height:20px; margin:0; padding:0; border-radius:50%; border:1px solid var(--two-btn-border); background:var(--two-btn); color:var(--two-fg); font:800 var(--two-fs-sm)/1 var(--two-font); cursor:pointer; touch-action:manipulation; }
+      .two-attack-next { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:4px; padding-top:4px; border-top:1px solid var(--two-strip-border); }
       .two-attack-next[hidden] { display:none !important; }
-      .two-attack-result { padding:2px 5px; border-radius:3px; border:1px solid rgba(255,255,255,.2); font:800 9px/1 Arial,sans-serif; }
-      .two-attack-result-win { color:#c9ffa0; border-color:rgba(137,255,67,.5); background:rgba(37,70,17,.5); }
-      .two-attack-result-loss { color:#ffb1a6; border-color:rgba(255,95,78,.6); background:rgba(75,24,18,.6); }
-      .two-attack-result-stalemate { color:#ddd; }
-      .two-attack-next-label { color:#999; font:800 8px/1 Arial,sans-serif; letter-spacing:.3px; }
-      .two-attack-next-link { color:#fff7d1; font:800 11px/1.2 Arial,sans-serif; text-decoration:none; padding:3px 8px; border-radius:4px; border:1px solid rgba(255,224,102,.9); background:rgba(92,70,8,.9); touch-action:manipulation; }
-      .two-attack-next-none { color:#bbb; font-weight:400; }
+      .two-attack-result { padding:2px 5px; border-radius:var(--two-r-sm); border:1px solid var(--two-strip-border); font:800 var(--two-fs-xxs)/1 var(--two-font); }
+      .two-attack-result-win { color:var(--two-good); border-color:var(--two-good); background:var(--two-good-bg); }
+      .two-attack-result-loss { color:var(--two-bad); border-color:var(--two-bad); background:var(--two-bad-bg); }
+      .two-attack-result-stalemate { color:var(--two-muted); }
+      .two-attack-next-label { color:var(--two-muted); font:800 var(--two-fs-xxs)/1 var(--two-font); letter-spacing:.3px; }
+      .two-attack-next-link { color:var(--two-fg); font:800 var(--two-fs-sm)/1.2 var(--two-font); text-decoration:none; padding:3px 8px; border-radius:var(--two-r); border:1px solid var(--two-good); background:var(--two-btn); touch-action:manipulation; }
+      .two-attack-next-none { color:var(--two-muted); font-weight:400; }
       .two-attack-panel .two-attack-next .two-intel-badge { pointer-events:none; }
       .two-sheet-backdrop { position:fixed; inset:0; z-index:99998; background:rgba(0,0,0,.45); }
       .two-sheet-backdrop[hidden] { display:none !important; }
-      .two-sheet { position:absolute; left:0; right:0; bottom:0; max-height:72vh; overflow:auto; box-sizing:border-box; padding:10px 12px calc(12px + env(safe-area-inset-bottom, 0px)); border-top:1px solid rgba(255,255,255,.2); border-radius:10px 10px 0 0; background:rgba(26,26,26,.98); color:#ddd; font:400 12px/1.4 Arial,sans-serif; box-shadow:0 -4px 16px rgba(0,0,0,.6); }
+      .two-sheet { position:absolute; left:0; right:0; bottom:0; max-height:72vh; overflow:auto; box-sizing:border-box; padding:10px 12px calc(12px + env(safe-area-inset-bottom, 0px)); border-top:1px solid var(--two-border); border-left:var(--two-edge) solid var(--two-strip-border); border-radius:var(--two-r-lg) var(--two-r-lg) 0 0; background:var(--two-bg); color:var(--two-fg); font:400 var(--two-fs-md)/1.4 var(--two-font); box-shadow:var(--two-shadow); }
       .two-sheet-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:6px; }
-      .two-sheet-title { color:#fff; font:800 14px/1.2 Arial,sans-serif; flex:1 1 auto; }
-      .two-sheet .two-intel-badge { font-size:10px; pointer-events:none; }
-      .two-sheet-facts { display:flex; flex-direction:column; gap:2px; padding-bottom:6px; border-bottom:1px solid rgba(255,255,255,.12); color:#ccc; }
-      .two-sheet-facts div:first-child { color:#fff7d1; font-weight:700; }
+      .two-sheet-title { color:var(--two-fg); font:800 var(--two-fs-xl)/1.2 var(--two-font); flex:1 1 auto; }
+      .two-sheet .two-intel-badge { font-size:var(--two-fs-xs); pointer-events:none; }
+      .two-sheet-facts { display:flex; flex-direction:column; gap:2px; padding-bottom:6px; border-bottom:1px solid var(--two-strip-border); color:var(--two-fg); }
+      .two-sheet-facts div:first-child { color:var(--two-fg); font-weight:700; }
       .two-sheet-body { padding-top:6px; display:flex; flex-direction:column; gap:3px; }
-      .two-sheet-body div:first-child { color:#fff; font-weight:700; }
+      .two-sheet-body div:first-child { color:var(--two-fg); font-weight:700; }
       .two-sheet-actions { margin-top:10px; display:flex; justify-content:flex-start; gap:10px; align-items:center; }
-      .two-sheet-link { color:#bfc8d0; font:700 11px/1.2 Arial,sans-serif; text-decoration:underline; padding:3px 4px; }
-      .two-hunt-dock { position:fixed; left:50%; bottom:calc(env(safe-area-inset-bottom, 0px) + 8px); transform:translateX(-50%); width:min(calc(100vw - 12px), 520px); z-index:99999; transition:bottom .18s ease-out; box-sizing:border-box; padding:8px; border-radius:12px; border:1px solid rgba(255,255,255,.16); background:#151515; color:#ddd; font:700 12px/1.25 Arial,sans-serif; box-shadow:0 -4px 16px rgba(0,0,0,.55); }
+      .two-sheet-link { color:var(--two-muted); font:700 var(--two-fs-sm)/1.2 var(--two-font); text-decoration:underline; padding:3px 4px; }
+      .two-hunt-dock { position:fixed; left:50%; bottom:calc(env(safe-area-inset-bottom, 0px) + 8px); transform:translateX(-50%); width:min(calc(100vw - 12px), 520px); z-index:99999; transition:bottom .18s ease-out; box-sizing:border-box; padding:8px; border-radius:var(--two-r-lg); border:1px solid var(--two-border); border-left:var(--two-edge) solid var(--two-strip-border); background:var(--two-bg); color:var(--two-fg); font:700 var(--two-fs-md)/1.25 var(--two-font); box-shadow:var(--two-shadow); }
       .two-hunt-dock[hidden], .two-hunt-dock [hidden] { display:none !important; }
       .two-hunt-dock.two-hunt-dock-min { left:auto; right:8px; transform:none; width:auto; padding:0; border-radius:22px; background:transparent; border:0; box-shadow:none; }
       .two-hd-top { display:flex; align-items:center; gap:7px; }
-      .two-hd-name { flex:1 1 auto; min-width:0; color:#fff; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      .two-hd-verdict { padding:4px 7px; border-radius:5px; font-size:11px; letter-spacing:.3px; color:#ddd; background:#444; }
-      .two-hd-v-easy { color:#dcffc4; background:#2f6b17; }
-      .two-hd-v-good { color:#fff3c4; background:#6b5a17; }
-      .two-hd-v-risky { color:#ffe0c4; background:#8a4a12; }
-      .two-hd-v-avoid { color:#ffd0c8; background:#8a1f17; }
-      .two-hd-status { font-size:11px; white-space:nowrap; font-variant-numeric:tabular-nums; color:#bfc8d0; }
-      .two-hd-s-okay { color:#c9ffa0; }
-      .two-hd-s-hospital { color:#ff9b8f; }
-      .two-hd-s-soon { color:#ffd36a; }
-      .two-hd-s-due { color:#c6ff84; }
-      .two-hd-energy { color:#ffe28a; font-size:12px; white-space:nowrap; font-variant-numeric:tabular-nums; }
-      .two-hd-energy.two-hd-energy-out { color:#ff9b8f; }
-      .two-hd-icon { appearance:none; -webkit-appearance:none; flex:0 0 34px; width:34px; height:34px; margin:0; padding:0; border-radius:50%; border:1px solid rgba(255,255,255,.22); background:rgba(255,255,255,.07); color:#ddd; font:800 14px/1 Arial,sans-serif; cursor:pointer; touch-action:manipulation; }
-      .two-hd-hint { margin-top:5px; color:#9fe0a0; font-weight:400; font-size:11px; }
+      .two-hd-name { flex:1 1 auto; min-width:0; color:var(--two-fg); font-size:var(--two-fs-lg); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .two-hd-verdict { padding:4px 7px; border-radius:var(--two-r); font-size:var(--two-fs-sm); letter-spacing:.3px; color:var(--two-muted); background:var(--two-strip); }
+      .two-hd-v-easy { color:var(--two-on-good); background:var(--two-good); }
+      .two-hd-v-good { color:var(--two-warn); background:var(--two-warn-bg); }
+      .two-hd-v-risky { color:var(--two-warn); background:var(--two-warn-bg); }
+      .two-hd-v-avoid { color:var(--two-bad); background:var(--two-bad-bg); }
+      .two-hd-status { font-size:var(--two-fs-sm); white-space:nowrap; font-variant-numeric:tabular-nums; color:var(--two-muted); }
+      .two-hd-s-okay { color:var(--two-good); }
+      .two-hd-s-hospital { color:var(--two-bad); }
+      .two-hd-s-soon { color:var(--two-warn); }
+      .two-hd-s-due { color:var(--two-good); }
+      .two-hd-energy { color:var(--two-warn); font-size:var(--two-fs-md); white-space:nowrap; font-variant-numeric:tabular-nums; }
+      .two-hd-energy.two-hd-energy-out { color:var(--two-bad); }
+      .two-hd-icon { appearance:none; -webkit-appearance:none; flex:0 0 34px; width:34px; height:34px; margin:0; padding:0; border-radius:50%; border:1px solid var(--two-btn-border); background:var(--two-btn); color:var(--two-fg); font:800 var(--two-fs-xl)/1 var(--two-font); cursor:pointer; touch-action:manipulation; }
+      .two-hd-treats { color:var(--two-warn); font-size:var(--two-fs-md); white-space:nowrap; font-variant-numeric:tabular-nums; }
+      .two-hd-guard { margin-top:5px; padding:3px 6px; border-left:var(--two-edge) solid var(--two-strip-border); border-radius:var(--two-r-sm); font-size:var(--two-fs-sm); background:var(--two-strip); color:var(--two-fg); }
+      .two-hd-guard-bad { border-left-color:var(--two-bad); color:var(--two-bad); background:var(--two-bad-bg); }
+      .two-hd-guard-warn { border-left-color:var(--two-warn); color:var(--two-warn); background:var(--two-warn-bg); }
+      .two-hd-guard-good { border-left-color:var(--two-good); color:var(--two-good); background:var(--two-good-bg); }
+      .two-hd-treat-gain { font-size:var(--two-fs-md); color:var(--two-muted); font-variant-numeric:tabular-nums; }
+      .two-hd-treat-gain.two-hd-treat-gain-yes { color:var(--two-warn); }
+      .two-hd-hint { margin-top:5px; color:var(--two-good); font-weight:400; font-size:var(--two-fs-sm); }
       .two-hd-result { display:flex; align-items:center; gap:8px; margin-top:5px; }
-      .two-hd-res { padding:4px 8px; border-radius:5px; font-size:12px; }
-      .two-hd-res-win { color:#dcffc4; background:#2f6b17; }
-      .two-hd-res-loss { color:#ffd0c8; background:#8a1f17; }
-      .two-hd-res-stalemate { color:#ddd; background:#444; }
-      .two-hd-session { margin-left:auto; color:#aaa; font-weight:400; font-size:11px; font-variant-numeric:tabular-nums; }
+      .two-hd-res { padding:4px 8px; border-radius:var(--two-r); font-size:var(--two-fs-md); }
+      .two-hd-res-win { color:var(--two-on-good); background:var(--two-good); }
+      .two-hd-res-loss { color:var(--two-bad); background:var(--two-bad-bg); }
+      .two-hd-res-stalemate { color:var(--two-muted); background:var(--two-strip); }
+      .two-hd-session { margin-left:auto; color:var(--two-muted); font-weight:400; font-size:var(--two-fs-sm); font-variant-numeric:tabular-nums; }
       .two-hd-actions { display:flex; gap:7px; margin-top:7px; align-items:stretch; }
-      .two-hd-pump { appearance:none; -webkit-appearance:none; flex:0 0 auto; min-width:56px; min-height:50px; margin:0; padding:4px 8px; border:0; border-radius:10px; background:#ff9a3c; color:#1a0d00; display:flex; flex-direction:column; align-items:center; justify-content:center; font:700 10px/1.1 Arial,sans-serif; cursor:pointer; touch-action:manipulation; }
+      .two-hd-pump { appearance:none; -webkit-appearance:none; flex:0 0 auto; min-width:56px; min-height:50px; margin:0; padding:4px 8px; border:1px solid var(--two-btn-border); border-radius:var(--two-r-lg); background:var(--two-btn); color:var(--two-fg); display:flex; flex-direction:column; align-items:center; justify-content:center; font:700 var(--two-fs-xs)/1.1 var(--two-font); cursor:pointer; touch-action:manipulation; }
       .two-hd-pump b { font-size:18px; font-variant-numeric:tabular-nums; }
-      .two-hd-next { flex:1 1 auto; min-width:0; min-height:50px; box-sizing:border-box; display:flex; flex-direction:column; justify-content:center; padding:4px 12px; border-radius:10px; border:1px solid rgba(255,224,102,.75); background:#4a3906; color:#fff7d1; text-decoration:none; touch-action:manipulation; }
-      .two-hd-next.two-hd-next-hot { background:#ffd23f; color:#231a00; border-color:#fff1a8; box-shadow:0 0 0 3px rgba(255,210,63,.28); }
-      .two-hd-next.two-hd-next-wait { border-style:dashed; border-color:rgba(255,255,255,.2); background:rgba(255,255,255,.04); color:#bbb; }
-      .two-hd-next-main { font-size:15px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      .two-hd-next-sub { font-size:11px; font-weight:400; opacity:.85; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      .two-hd-detail { margin-top:7px; padding-top:7px; border-top:1px solid rgba(255,255,255,.12); font-weight:400; font-size:11px; color:#ccc; max-height:38vh; overflow:auto; }
+      .two-hd-next { flex:1 1 auto; min-width:0; min-height:50px; box-sizing:border-box; display:flex; flex-direction:column; justify-content:center; padding:4px 12px; border-radius:var(--two-r-lg); border:1px solid var(--two-good); background:var(--two-btn); color:var(--two-fg); text-decoration:none; touch-action:manipulation; }
+      .two-hd-next.two-hd-next-hot { background:var(--two-good); color:var(--two-on-good); border-color:var(--two-good); }
+      .two-hd-next.two-hd-next-wait { border-style:dashed; border-color:var(--two-btn-border); background:var(--two-strip); color:var(--two-muted); }
+      .two-hd-next-main { font-size:var(--two-fs-xl); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .two-hd-next-sub { font-size:var(--two-fs-sm); font-weight:400; opacity:.85; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .two-hd-detail { margin-top:7px; padding-top:7px; border-top:1px solid var(--two-strip-border); font-weight:400; font-size:var(--two-fs-sm); color:var(--two-fg); max-height:38vh; overflow:auto; }
       .two-hd-detail div { padding:2px 0; }
-      .two-hd-stop { appearance:none; -webkit-appearance:none; margin-top:6px; min-height:40px; padding:0 14px; border-radius:8px; border:1px solid rgba(255,120,100,.55); background:rgba(80,24,18,.7); color:#ffd0c8; font:700 12px Arial,sans-serif; cursor:pointer; }
-      .two-hd-pill { appearance:none; -webkit-appearance:none; min-height:44px; padding:0 16px; border-radius:22px; border:1px solid #ffb470; background:#ff9a3c; color:#1a0d00; font:800 13px/1 Arial,sans-serif; box-shadow:0 2px 10px rgba(0,0,0,.5); cursor:pointer; touch-action:manipulation; }
+      .two-hd-stop { appearance:none; -webkit-appearance:none; margin-top:6px; min-height:40px; padding:0 14px; border-radius:var(--two-r-lg); border:1px solid var(--two-bad); background:var(--two-bad-bg); color:var(--two-bad); font:700 var(--two-fs-md) var(--two-font); cursor:pointer; }
+      .two-hd-pill { appearance:none; -webkit-appearance:none; min-height:44px; padding:0 16px; border-radius:22px; border:1px solid var(--two-good); background:var(--two-good); color:var(--two-on-good); font:800 var(--two-fs-lg)/1 var(--two-font); box-shadow:var(--two-shadow); cursor:pointer; touch-action:manipulation; }
       .two-hd-buttons { display:flex; gap:8px; flex-wrap:wrap; margin-top:6px; }
       .two-hd-buttons .two-hd-stop { margin-top:0; }
-      .two-hd-tools { appearance:none; -webkit-appearance:none; margin-top:6px; min-height:40px; padding:0 14px; border-radius:8px; border:1px solid rgba(255,255,255,.25); background:rgba(255,255,255,.08); color:#ddd; font:700 12px Arial,sans-serif; cursor:pointer; touch-action:manipulation; }
+      .two-hd-tools { appearance:none; -webkit-appearance:none; margin-top:6px; min-height:40px; padding:0 14px; border-radius:var(--two-r-lg); border:1px solid var(--two-btn-border); background:var(--two-btn); color:var(--two-fg); font:700 var(--two-fs-md) var(--two-font); cursor:pointer; touch-action:manipulation; }
       .two-hd-buttons .two-hd-tools { margin-top:0; }
       .two-tools-overlay { position:fixed; inset:0; z-index:100001; background:rgba(0,0,0,.55); display:flex; align-items:flex-end; justify-content:center; }
-      .two-tools-sheet { box-sizing:border-box; width:min(100vw, 520px); max-height:80vh; overflow:auto; padding:12px 12px calc(env(safe-area-inset-bottom, 0px) + 12px); border-radius:14px 14px 0 0; background:#151515; border:1px solid rgba(255,255,255,.16); color:#ddd; font:700 13px/1.3 Arial,sans-serif; box-shadow:0 -6px 20px rgba(0,0,0,.6); }
-      .two-tools-title { color:#fff; font-size:14px; padding:2px 2px 8px; }
-      .two-tools-group { color:#999; font-size:10px; letter-spacing:.4px; text-transform:uppercase; padding:10px 2px 4px; }
-      .two-tools-btn { appearance:none; -webkit-appearance:none; display:block; width:100%; min-height:44px; margin:0 0 6px; padding:0 14px; text-align:left; border-radius:8px; border:1px solid rgba(255,255,255,.14); background:rgba(255,255,255,.06); color:#eee; font:700 13px Arial,sans-serif; cursor:pointer; touch-action:manipulation; }
-      .two-tools-btn.two-tools-close { margin-top:10px; text-align:center; background:rgba(255,255,255,.12); }
-      .two-attack-hunt { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:4px; padding-top:4px; border-top:1px solid rgba(255,255,255,.12); }
-      .two-hunt-toggle { appearance:none; -webkit-appearance:none; margin:0; padding:3px 7px; border-radius:4px; border:1px solid rgba(255,153,51,.6); background:rgba(60,32,8,.7); color:#ffc58a; font:800 9px/1 Arial,sans-serif; letter-spacing:.3px; cursor:pointer; touch-action:manipulation; }
-      .two-attack-detail { margin-top:4px; padding-top:4px; border-top:1px solid rgba(255,255,255,.12); font-weight:400; font-size:10px; color:#ccc; max-height:40vh; overflow:auto; }
+      .two-tools-sheet { box-sizing:border-box; width:min(100vw, 520px); max-height:80vh; overflow:auto; padding:12px 12px calc(env(safe-area-inset-bottom, 0px) + 12px); border-radius:var(--two-r-lg) var(--two-r-lg) 0 0; background:var(--two-bg); border:1px solid var(--two-border); border-left:var(--two-edge) solid var(--two-strip-border); color:var(--two-fg); font:700 var(--two-fs-lg)/1.3 var(--two-font); box-shadow:var(--two-shadow); }
+      .two-tools-title { color:var(--two-fg); font-size:var(--two-fs-xl); padding:2px 2px 8px; }
+      .two-tools-group { color:var(--two-muted); font-size:var(--two-fs-xs); letter-spacing:.4px; text-transform:uppercase; padding:10px 2px 4px; }
+      .two-tools-btn { appearance:none; -webkit-appearance:none; display:block; width:100%; min-height:44px; margin:0 0 6px; padding:0 14px; text-align:left; border-radius:var(--two-r-lg); border:1px solid var(--two-btn-border); background:var(--two-btn); color:var(--two-fg); font:700 var(--two-fs-lg) var(--two-font); cursor:pointer; touch-action:manipulation; }
+      .two-tools-btn.two-tools-close { margin-top:10px; text-align:center; background:var(--two-btn-hover); }
+      .two-attack-hunt { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:4px; padding-top:4px; border-top:1px solid var(--two-strip-border); }
+      .two-hunt-toggle { appearance:none; -webkit-appearance:none; margin:0; padding:3px 7px; border-radius:var(--two-r); border:1px solid var(--two-warn); background:var(--two-warn-bg); color:var(--two-warn); font:800 var(--two-fs-xxs)/1 var(--two-font); letter-spacing:.3px; cursor:pointer; touch-action:manipulation; }
+      .two-attack-detail { margin-top:4px; padding-top:4px; border-top:1px solid var(--two-strip-border); font-weight:400; font-size:var(--two-fs-xs); color:var(--two-fg); max-height:40vh; overflow:auto; }
       .two-attack-detail div { padding:1px 0; }
-      .two-attack-detail div:first-child { color:#fff; font-weight:700; }
-      @keyframes two-chip-pulse { from{box-shadow:0 0 0 rgba(255,214,64,0)} to{box-shadow:0 0 6px rgba(255,214,64,.7)} }
-      .two-age-badge { position:relative; pointer-events:none; white-space:nowrap; box-sizing:border-box; padding:1px 3px; border-radius:3px; border:1px solid rgba(255,255,255,.20); background:rgba(18,18,18,.78); color:#dedede; font:700 8px/1.15 Arial,sans-serif; letter-spacing:-.1px; box-shadow:0 1px 2px rgba(0,0,0,.35); }
-      .two-activity-badge { position:relative; pointer-events:none; white-space:nowrap; box-sizing:border-box; padding:1px 3px; border-radius:3px; border:1px solid rgba(255,255,255,.15); background:rgba(18,18,18,.70); color:#aaa; font:700 7px/1.15 Arial,sans-serif; font-variant-numeric:tabular-nums; box-shadow:0 1px 2px rgba(0,0,0,.28); }
-      .two-activity-badge.two-activity-online { color:#ff9d8e; border-color:rgba(255,95,78,.38); }
-      .two-activity-badge.two-activity-idle { color:#e9d78c; border-color:rgba(232,202,94,.38); }
-      .two-activity-badge.two-activity-offline { color:#bfc8d0; border-color:rgba(182,199,214,.34); }
-      .two-activity-badge.two-target { color:#eaffd5; border-color:rgba(137,255,67,.72); background:rgba(42,82,12,.88); }
-      .two-activity-badge.two-good { color:#fff0a8; border-color:rgba(255,205,61,.72); background:rgba(83,61,8,.88); }
+      .two-attack-detail div:first-child { color:var(--two-fg); font-weight:700; }
+      @keyframes two-chip-pulse { from{box-shadow:0 0 0 0 transparent} to{box-shadow:0 0 0 2px var(--two-warn)} }
+      .two-age-badge { position:relative; pointer-events:none; white-space:nowrap; box-sizing:border-box; padding:1px 3px; border-radius:var(--two-r-sm); border:1px solid var(--two-strip-border); background:var(--two-strip); color:var(--two-fg); font:700 var(--two-fs-xxs)/1.15 var(--two-font); letter-spacing:-.1px; }
+      .two-activity-badge { position:relative; pointer-events:none; white-space:nowrap; box-sizing:border-box; padding:1px 3px; border-radius:var(--two-r-sm); border:1px solid var(--two-strip-border); background:var(--two-strip); color:var(--two-muted); font:700 var(--two-fs-xxs)/1.15 var(--two-font); font-variant-numeric:tabular-nums; }
+      .two-activity-badge.two-activity-online { color:var(--two-bad); border-color:var(--two-bad); }
+      .two-activity-badge.two-activity-idle { color:var(--two-warn); border-color:var(--two-warn); }
+      .two-activity-badge.two-activity-offline { color:var(--two-muted); border-color:var(--two-strip-border); }
+      .two-activity-badge.two-target { color:var(--two-good); border-color:var(--two-good); background:var(--two-good-bg); }
+      .two-activity-badge.two-good { color:var(--two-warn); border-color:var(--two-warn); background:var(--two-warn-bg); }
       .two-age-badge.two-loading { opacity:.45; }
       .two-age-badge.two-estimate { border-style:dashed; }
-      .two-age-badge.two-candidate { color:#e8f7b3; border-color:rgba(204,235,116,.58); background:rgba(54,63,22,.84); }
-      .two-age-badge.two-young { color:#d6ff9b; border-color:rgba(151,220,75,.58); background:rgba(28,48,13,.84); }
-      .two-age-badge.two-target { color:#efffd7; border-color:rgba(151,255,79,.98); background:rgba(42,82,12,.95); box-shadow:0 0 5px rgba(132,255,60,.50),0 1px 2px rgba(0,0,0,.45); }
-      .two-age-badge.two-good { color:#fff0a8; border-color:rgba(255,205,61,.95); background:rgba(83,61,8,.95); box-shadow:0 0 4px rgba(255,196,45,.35),0 1px 2px rgba(0,0,0,.45); }
+      .two-age-badge.two-candidate { color:var(--two-good); border-color:var(--two-strip-border); background:var(--two-good-bg); }
+      .two-age-badge.two-young { color:var(--two-good); border-color:var(--two-good); background:var(--two-good-bg); }
+      .two-age-badge.two-target { color:var(--two-on-good); border-color:var(--two-good); background:var(--two-good); }
+      .two-age-badge.two-good { color:var(--two-warn); border-color:var(--two-warn); background:var(--two-warn-bg); }
 
-      ul.members-list li.two-good-target { outline:1px solid rgba(255,205,61,.76); outline-offset:-1px; }
-      ul.members-list li.two-good-target .member { box-shadow:inset 4px 0 0 rgba(255,205,61,.92),inset 0 0 18px rgba(220,165,20,.09) !important; }
-      ul.members-list li.two-good-target .attack a, ul.members-list li.two-good-target a[href*='loader.php?sid=attack'], ul.members-list li.two-good-target a[href*='attack'] { color:#ffd85a !important; font-weight:800 !important; text-shadow:0 0 4px rgba(255,196,45,.30); }
+      ul.members-list li.two-good-target { outline:1px solid var(--two-warn); outline-offset:-1px; }
+      ul.members-list li.two-good-target .member { box-shadow:inset 4px 0 0 var(--two-warn) !important; }
+      ul.members-list li.two-good-target .attack a, ul.members-list li.two-good-target a[href*='loader.php?sid=attack'], ul.members-list li.two-good-target a[href*='attack'] { color:var(--two-warn) !important; font-weight:800 !important; }
 
-      ul.members-list li.two-ideal-target { outline:1px solid rgba(137,255,67,.78); outline-offset:-1px; }
-      ul.members-list li.two-ideal-target .member { box-shadow:inset 4px 0 0 rgba(137,255,67,.95),inset 0 0 20px rgba(90,190,28,.10) !important; }
-      ul.members-list li.two-ideal-target .attack a, ul.members-list li.two-ideal-target a[href*='loader.php?sid=attack'], ul.members-list li.two-ideal-target a[href*='attack'] { color:#baff76 !important; font-weight:800 !important; text-shadow:0 0 4px rgba(130,255,60,.40); }
+      ul.members-list li.two-ideal-target { outline:1px solid var(--two-good); outline-offset:-1px; }
+      ul.members-list li.two-ideal-target .member { box-shadow:inset 4px 0 0 var(--two-good) !important; }
+      ul.members-list li.two-ideal-target .attack a, ul.members-list li.two-ideal-target a[href*='loader.php?sid=attack'], ul.members-list li.two-ideal-target a[href*='attack'] { color:var(--two-good) !important; font-weight:800 !important; }
       ul.members-list li.two-ideal-soon { animation:two-target-pulse 1.2s ease-in-out infinite alternate; }
-      @keyframes two-target-pulse { from{outline-color:rgba(137,255,67,.55)} to{outline-color:rgba(205,255,151,1)} }
-      ul.members-list li.two-due-target .status { box-shadow:inset 0 0 12px rgba(137,255,67,.08); }
-      ul.members-list li.two-dom-ready .member { box-shadow:inset 4px 0 0 rgba(137,255,67,1),inset 0 0 24px rgba(90,190,28,.14) !important; }
+      @keyframes two-target-pulse { from{outline-color:var(--two-good-bg)} to{outline-color:var(--two-good)} }
+      ul.members-list li.two-dom-ready .member { box-shadow:inset 4px 0 0 var(--two-good) !important; }
       ul.members-list li.two-target-focus-flash { animation:two-focus-flash ${TARGET_FLASH_MS}ms ease-out 1 !important; }
-      @keyframes two-focus-flash { 0%{box-shadow:0 0 0 3px rgba(255,255,255,.95),0 0 18px rgba(255,255,255,.55)} 100%{box-shadow:0 0 0 0 rgba(255,255,255,0),0 0 0 rgba(255,255,255,0)} }
+      @keyframes two-focus-flash { 0%{box-shadow:0 0 0 3px var(--two-fg)} 100%{box-shadow:0 0 0 0 transparent} }
 
-      .two-hosp-badge { position:absolute; right:3px; bottom:2px; z-index:20; pointer-events:none; white-space:nowrap; box-sizing:border-box; min-width:27px; padding:1px 3px; border-radius:3px; border:1px solid rgba(255,95,78,.55); background:rgba(35,15,13,.82); color:#ff9b8f; text-align:center; font:800 9px/1.15 Arial,sans-serif; font-variant-numeric:tabular-nums; box-shadow:0 1px 2px rgba(0,0,0,.35); }
+      .two-hosp-badge { position:absolute; right:3px; bottom:2px; z-index:20; pointer-events:none; white-space:nowrap; box-sizing:border-box; min-width:27px; padding:1px 3px; border-radius:var(--two-r-sm); border:1px solid var(--two-bad); background:var(--two-bad-bg); color:var(--two-bad); text-align:center; font:800 var(--two-fs-xxs)/1.15 var(--two-font); font-variant-numeric:tabular-nums; }
       .two-hosp-badge.two-provisional-badge { opacity:.62; border-style:dashed; }
-      .two-hosp-badge.two-soon { color:#ffd36a; border-color:rgba(255,193,64,.80); background:rgba(55,40,10,.86); }
-      .two-hosp-badge.two-watch-window { color:#fff0a8; border-color:rgba(255,205,61,.98); background:rgba(83,61,8,.95); box-shadow:0 0 4px rgba(255,196,45,.30),0 1px 2px rgba(0,0,0,.35); }
-      .two-hosp-badge.two-now { color:#c6ff84; border-color:rgba(123,255,74,.95); background:rgba(36,72,10,.90); font-size:10px; }
-      .two-hosp-badge.two-target-window { color:#e9ffd0; border-color:rgba(137,255,67,.98); background:rgba(42,82,12,.95); box-shadow:0 0 5px rgba(132,255,60,.42),0 1px 2px rgba(0,0,0,.35); }
+      .two-hosp-badge.two-soon { color:var(--two-warn); border-color:var(--two-warn); background:var(--two-warn-bg); }
+      .two-hosp-badge.two-watch-window { color:var(--two-warn); border-color:var(--two-warn); background:var(--two-warn-bg); }
+      .two-hosp-badge.two-now { color:var(--two-good); border-color:var(--two-good); background:var(--two-good-bg); font-size:var(--two-fs-xs); }
+      .two-hosp-badge.two-target-window { color:var(--two-on-good); border-color:var(--two-good); background:var(--two-good); }
       .two-hosp-badge.two-due { min-width:31px; letter-spacing:.1px; }
       .two-hosp-badge.two-volatile { border-style:dashed; }
 
       @media (max-width:600px) {
         .two-target-toolbar { min-height:27px; padding:3px 5px; gap:4px; }
-        .two-mode-btn { min-height:21px; padding:2px 7px; font-size:8px; }
+        .two-mode-btn { min-height:21px; padding:2px 7px; font-size:var(--two-fs-xxs); }
         .two-toolbar-right { gap:5px; }
-        .two-history-key-btn { font-size:6px; padding:2px 3px; }
-        .two-sync-indicator { font-size:6.5px; padding:2px 3px; }
-        .two-target-counter { gap:7px; font-size:9px; }
+        .two-history-key-btn { font-size:var(--two-fs-xxs); padding:2px 3px; }
+        .two-sync-indicator { font-size:var(--two-fs-xxs); padding:2px 3px; }
+        .two-target-counter { gap:7px; font-size:var(--two-fs-xxs); }
         .two-member-meta { right:3px; bottom:2px; gap:1px; }
         .two-attack-history { gap:1px; }
         .two-attack-dot { width:5px; height:5px; flex-basis:5px; }
-        .two-age-badge { font-size:7.5px; padding:1px 2px; }
-        .two-activity-badge { font-size:6.5px; padding:1px 2px; }
-        .two-intel-badge { font-size:7px; padding:1px 2px; }
-        .two-context-chip { font-size:6.5px; padding:2px 3px; }
-        .two-hosp-badge { right:2px; bottom:2px; min-width:25px; font-size:8px; padding:1px 2px; }
-        .two-hosp-badge.two-now { font-size:9px; }
+        .two-age-badge { font-size:var(--two-fs-xxs); padding:1px 2px; }
+        .two-activity-badge { font-size:var(--two-fs-xxs); padding:1px 2px; }
+        .two-intel-badge { font-size:var(--two-fs-xxs); padding:1px 2px; }
+        .two-context-chip { font-size:var(--two-fs-xxs); padding:2px 3px; }
+        .two-hosp-badge { right:2px; bottom:2px; min-width:25px; font-size:var(--two-fs-xxs); padding:1px 2px; }
+        .two-hosp-badge.two-now { font-size:var(--two-fs-xxs); }
       }
     `;
     document.head.appendChild(style);
@@ -5711,6 +5724,22 @@
   let huntSaveTimer = null;
   const huntRequestTimes = [];
 
+  // Halloween treats (v0.27): Torn's official /user/competition reports the treat total and basket while the event
+  // runs, with a Public key. Read when hunting starts, 4 s and 15 s after each fight (the count lags the page), and
+  // otherwise every 5 minutes. No Halloween competition (NoCompetitionAvailable) or a permanent error: retry in 30 min.
+  const TREATS_REFRESH_MS = 5 * 60_000;
+  const TREATS_RETRY_MS = 30 * 60_000;
+  let huntTreats = null; // { total, basket, fetchedAt, fightBase } | null; fightBase is the total before the last fight
+  let huntTreatsLastAt = 0;
+  let huntTreatsOffUntil = 0;
+  let huntTreatsInFlight = null;
+
+  // Own ranked war for the hunt guard (v0.27): hunt hits score nothing for a war, so the dock says when one is running.
+  const OWN_WAR_REFRESH_MS = 5 * 60_000;
+  let ownWar = null; // normalizeRankedWar() result for the key owner's faction | null
+  let ownWarLastAt = 0;
+  let ownWarUnsupported = false;
+
   function loadHuntState() {
     const raw = loadObjectJson(HUNT_STORAGE, {});
     const cursor = Number(raw.cursor);
@@ -5720,8 +5749,18 @@
       scanned: Number(raw.scanned) || 0,
       found: Number(raw.found) || 0,
       pool: normalizeHuntPool(raw.pool),
-      session: raw.session && typeof raw.session === 'object' ? { day: String(raw.session.day || ''), w: Number(raw.session.w) || 0, l: Number(raw.session.l) || 0 } : null,
+      session: raw.session && typeof raw.session === 'object' ? normalizeHuntSession(raw.session) : null,
       minimized: Boolean(raw.minimized),
+    };
+  }
+
+  // Session (one Torn day): w wins, l losses, t0 treat total at the first reading today (null until read), ta fights
+  // finished since that reading. Treats per fight is (current total - t0) / ta.
+  function normalizeHuntSession(raw) {
+    const t0 = Number(raw.t0);
+    return {
+      day: String(raw.day || ''), w: Number(raw.w) || 0, l: Number(raw.l) || 0,
+      t0: raw.t0 !== null && raw.t0 !== undefined && Number.isFinite(t0) && t0 >= 0 ? t0 : null, ta: Number(raw.ta) || 0,
     };
   }
 
@@ -6215,7 +6254,9 @@
 
   function huntSession() {
     const today = huntTodayKey();
-    if (!huntState.session || huntState.session.day !== today) huntState.session = { day: today, w: 0, l: 0 };
+    if (!huntState.session || huntState.session.day !== today) {
+      huntState.session = { day: today, w: 0, l: 0, t0: Number.isFinite(huntTreats?.total) ? huntTreats.total : null, ta: 0 };
+    }
     return huntState.session;
   }
 
@@ -6223,6 +6264,7 @@
     const session = huntSession();
     if (kind === 'win') session.w += 1;
     else if (kind === 'loss') session.l += 1;
+    if (session.t0 !== null) session.ta += 1;
     saveHuntState();
   }
 
@@ -6297,6 +6339,9 @@
     const status = document.createElement('span');
     const energy = document.createElement('span');
     energy.className = 'two-hd-energy';
+    const treats = document.createElement('span');
+    treats.className = 'two-hd-treats';
+    treats.hidden = true;
     const info = makeDockButton('two-hd-icon', 'i', 'Show hunt details', () => { huntDetailOpen = !huntDetailOpen; renderAttackPanel(); });
     const minimize = makeDockButton('two-hd-icon', '–', 'Minimise; hunting continues', () => {
       if (attackFightActive && !attackFightResult) { huntOpenedDuringFight = false; renderAttackPanel(); return; }
@@ -6304,7 +6349,10 @@
       saveHuntState();
       renderAttackPanel();
     });
-    top.append(name, verdict, status, energy, info, minimize);
+    top.append(name, verdict, status, energy, treats, info, minimize);
+
+    const guard = document.createElement('div');
+    guard.hidden = true;
 
     const hint = document.createElement('div');
     hint.className = 'two-hd-hint';
@@ -6312,9 +6360,11 @@
     const result = document.createElement('div');
     result.className = 'two-hd-result';
     const resultChip = document.createElement('span');
+    const treatGain = document.createElement('span');
+    treatGain.className = 'two-hd-treat-gain';
     const session = document.createElement('span');
     session.className = 'two-hd-session';
-    result.append(resultChip, session);
+    result.append(resultChip, treatGain, session);
 
     const actions = document.createElement('div');
     actions.className = 'two-hd-actions';
@@ -6343,7 +6393,7 @@
     detail.className = 'two-hd-detail';
     detail.hidden = true;
 
-    full.append(top, hint, result, actions, detail);
+    full.append(top, guard, hint, result, actions, detail);
 
     const pill = makeDockButton('two-hd-pill', '', 'Show the hunt panel', () => {
       if (attackFightActive && !attackFightResult) huntOpenedDuringFight = true;
@@ -6354,8 +6404,8 @@
 
     dock.append(full, pill);
     Object.assign(dock, {
-      __twoHuntDock: true, __full: full, __name: name, __verdict: verdict, __status: status, __energy: energy, __hint: hint,
-      __result: result, __resultChip: resultChip, __session: session, __pumpCount: pumpCount, __link: link,
+      __twoHuntDock: true, __full: full, __name: name, __verdict: verdict, __status: status, __energy: energy, __treats: treats, __guard: guard,
+      __hint: hint, __result: result, __resultChip: resultChip, __treatGain: treatGain, __session: session, __pumpCount: pumpCount, __link: link,
       __linkMain: linkMain, __linkSub: linkSub, __waiting: waiting, __waitMain: waitMain, __waitSub: waitSub,
       __detail: detail, __pill: pill,
     });
@@ -6377,8 +6427,9 @@
     dock.__full.hidden = minimized;
     dock.__pill.hidden = !minimized;
     setClass(dock, `two-hunt-dock${minimized ? ' two-hunt-dock-min' : ''}`);
+    const guard = huntGuardView();
     if (minimized) {
-      setText(dock.__pill, `HUNT ${ready} ▴`);
+      setText(dock.__pill, `HUNT ${ready}${guard?.tone === 'bad' ? ' ⚠' : ''} ▴`);
       return;
     }
 
@@ -6405,14 +6456,30 @@
       ? `Energy ${ownBars.energyCurrent}/${ownBars.energyMax}: ${hits} hit${hits === 1 ? '' : 's'} at 25 each.`
       : `Energy unavailable${ownBarsError ? `: ${ownBarsError}` : ' (not read yet)'}.`;
 
+    const treats = huntTreats;
+    dock.__treats.hidden = !treats;
+    if (treats) {
+      setText(dock.__treats, `🍬${formatCount(treats.total)}`);
+      dock.__treats.title = `${formatCount(treats.total)} Halloween treats collected${treats.basket ? ` · ${treats.basket}` : ''}`;
+    }
+
+    dock.__guard.hidden = !guard;
+    if (guard) {
+      setText(dock.__guard, guard.text);
+      setClass(dock.__guard, `two-hd-guard two-hd-guard-${guard.tone}`);
+      dock.__guard.title = guard.title;
+    }
+
+    // Hunt targets are random players, not war enemies: leaving always beats the war rule of hospitalizing active ones.
     const result = attackFightResult;
     dock.__hint.hidden = Boolean(result);
     if (!result) {
-      const finish = finishHintForUser(userId);
-      setText(dock.__hint, finish.action === 'LEAVE'
-        ? 'If you win: Leave, so they are back for another hit sooner'
-        : 'If you win: Hospitalize, they are active right now');
-      dock.__hint.title = finish.reason;
+      setText(dock.__hint, treats
+        ? 'If you win: Leave, and land the last hit with a scary weapon'
+        : 'If you win: Leave, so they are back for another hit sooner');
+      dock.__hint.title = treats
+        ? 'Leave keeps their hospital stay shortest, so they come back as a target sooner. A scary weapon (axe, chainsaw, sickle and others) on the final hit adds 10% treat chance once you own the "Here\'s Johnny" basket upgrade.'
+        : 'Leave keeps their hospital stay shortest, so they come back as a target sooner.';
     }
     dock.__result.hidden = !result;
     if (result) {
@@ -6421,7 +6488,15 @@
       setClass(dock.__resultChip, `two-hd-res two-hd-res-${result.kind}`);
       dock.__resultChip.title = result.line;
       const session = huntSession();
-      setText(dock.__session, `${session.w} W · ${session.l} L today`);
+      const todayTreats = treats && session.t0 !== null ? treats.total - session.t0 : null;
+      setText(dock.__session, `${session.w} W · ${session.l} L today${todayTreats !== null ? ` · 🍬+${formatCount(todayTreats)}` : ''}`);
+      const gainKnown = treats && treats.fightBase !== null && treats.fetchedAt > result.at;
+      dock.__treatGain.hidden = !treats || result.kind !== 'win';
+      if (!dock.__treatGain.hidden) {
+        const gain = gainKnown ? treats.total - treats.fightBase : null;
+        setText(dock.__treatGain, gain === null ? '🍬 …' : gain > 0 ? `🍬 +${gain}` : 'no treat');
+        setClass(dock.__treatGain, `two-hd-treat-gain${gain > 0 ? ' two-hd-treat-gain-yes' : ''}`);
+      }
     }
 
     setText(dock.__pumpCount, String(ready));
@@ -6449,6 +6524,17 @@
     if (huntDetailOpen) renderHuntDetail(dock.__detail, { ready, nowSec, intel, userId });
   }
 
+  // Measured yield: treats gained today divided by fights finished since the first treat reading. 25 energy a fight.
+  function huntTreatsLine(session) {
+    const head = `Treats: ${formatCount(huntTreats.total)} collected${huntTreats.basket ? ` · ${huntTreats.basket}` : ''}`;
+    if (session.t0 === null) return `${head}.`;
+    const gained = huntTreats.total - session.t0;
+    if (session.ta <= 0) return `${head} · +${formatCount(gained)} today, no fights counted yet.`;
+    const perFight = gained / session.ta;
+    const per100 = perFight * (100 / ENERGY_PER_ATTACK);
+    return `${head} · +${formatCount(gained)} today from ${session.ta} fight${session.ta === 1 ? '' : 's'}: ${perFight.toFixed(2)} a fight, ${per100.toFixed(1)} per 100 energy.`;
+  }
+
   function renderHuntDetail(detail, { ready, intel, userId }) {
     const poolSize = Object.keys(huntState.pool).length;
     const goal = huntAvailableGoal();
@@ -6457,6 +6543,7 @@
       `Hunt: ${ready} targets confirmed free in the last ${HUNT_FRESH_SEC / 60} min (goal ${goal}: ${ownBars ? `twice your ${Math.floor(ownBars.energyCurrent / ENERGY_PER_ATTACK)} hits, between ${HUNT_MIN_AVAILABLE} and ${HUNT_MAX_AVAILABLE}` : `the minimum, because your energy is unknown`}). ${formatCount(poolSize)} saved.`,
       `Scanner: ${huntLastNote || 'idle'} · ${huntRatePerMinute()} requests/min · next ID #${huntState.cursor ? formatCount(huntState.cursor) : '?'} · ${formatCount(huntState.scanned)} IDs checked.`,
       `Today: ${session.w} win${session.w === 1 ? '' : 's'}, ${session.l} loss${session.l === 1 ? '' : 'es'}.`,
+      ...(huntTreats ? [huntTreatsLine(session)] : []),
       ownBars ? `Energy ${ownBars.energyCurrent}/${ownBars.energyMax}.` : `Energy unavailable${ownBarsError ? `: ${ownBarsError}` : ' (not read yet)'}.`,
       ...(intel ? describeIntel(intel, userId).split(' | ') : []),
     ];
@@ -6479,6 +6566,11 @@
   function onAttackFightFinished(result) {
     attackFightResult = { ...result, at: Date.now() };
     incStat('fightResultsCaptured');
+    if (huntState.enabled && huntTreats) {
+      huntTreats.fightBase = huntTreats.total;
+      setTimeout(() => refreshTreats({ force: true }), 4_000);
+      setTimeout(() => refreshTreats({ force: true }), 15_000);
+    }
     renderAttackPanel();
     // The API record lags the page by a few seconds; ingest twice so the observed verdict lands before the next fight.
     setTimeout(() => ingestRecentAttacksOnAttackPage(), 4_000);
@@ -6590,6 +6682,86 @@
     return ownBars;
   }
 
+  async function refreshTreats({ force = false } = {}) {
+    if (!apiKey || apiPermanentlyDisabled || !huntState.enabled) return huntTreats;
+    if (huntTreatsInFlight) return huntTreatsInFlight;
+    const now = Date.now();
+    if (now < huntTreatsOffUntil || now < globalBackoffUntil) return huntTreats;
+    if (!force && now - huntTreatsLastAt < TREATS_REFRESH_MS - 1_000) return huntTreats;
+    huntTreatsLastAt = now;
+    const flight = (async () => {
+      try {
+        const data = await apiGet('/user/competition', { cacheBust: true });
+        const competition = data?.competition;
+        const total = Number(competition?.treats_collected);
+        if (String(competition?.name || '').toLowerCase() !== 'halloween' || !Number.isFinite(total) || total < 0) {
+          huntTreats = null;
+          huntTreatsOffUntil = Date.now() + TREATS_RETRY_MS;
+          return null;
+        }
+        huntTreats = {
+          total,
+          basket: typeof competition?.basket?.name === 'string' ? competition.basket.name : '',
+          fetchedAt: Date.now(),
+          fightBase: huntTreats?.fightBase ?? null,
+        };
+        const session = huntSession();
+        if (session.t0 === null) { session.t0 = total; session.ta = 0; saveHuntState(); }
+      } catch (err) {
+        if (err?.message === 'API backoff active.' || err?.retryable) return huntTreats;
+        huntTreats = null;
+        huntTreatsOffUntil = Date.now() + TREATS_RETRY_MS; // Usually NoCompetitionAvailable: the event is not running.
+      } finally {
+        renderAttackPanel();
+      }
+      return huntTreats;
+    })().finally(() => {
+      if (huntTreatsInFlight === flight) huntTreatsInFlight = null;
+    });
+    huntTreatsInFlight = flight;
+    return flight;
+  }
+
+  async function refreshOwnWar() {
+    if (!apiKey || apiPermanentlyDisabled || ownWarUnsupported) return ownWar;
+    if (Date.now() - ownWarLastAt < OWN_WAR_REFRESH_MS - 1_000 || Date.now() < globalBackoffUntil) return ownWar;
+    ownWarLastAt = Date.now();
+    try {
+      await ensurePrimaryKeyInfo();
+      if (!ownFactionId) { ownWar = null; return null; }
+      const data = await apiGet('/faction/wars', { cacheBust: true });
+      const ranked = data?.wars?.ranked;
+      const enemy = (Array.isArray(ranked?.factions) ? ranked.factions : []).find(item => Number(item?.id) !== Number(ownFactionId));
+      ownWar = enemy ? normalizeRankedWar(ranked, enemy.id, Math.floor(serverNowSec())) : null;
+    } catch (err) {
+      if (Number(err?.code) === 7 || Number(err?.code) === 16 || (err && !err.retryable && err.message !== 'API backoff active.')) {
+        ownWarUnsupported = true;
+        ownWar = null;
+      } else if (err?.message !== 'API backoff active.') {
+        console.warn(`[${SCRIPT}] Could not check your faction's ranked war`, err);
+      }
+    }
+    return ownWar;
+  }
+
+  // One line above the hunt hint when hunting could cost the faction: a chain bonus hit is next, or a ranked war is on.
+  function huntGuardView() {
+    const chain = getChainSnapshot();
+    if (chain?.bonusNext && ownWar) {
+      return { tone: 'bad', text: `Chain bonus next (hit ${formatCount(chain.nextHit)}): save it for a war target`, title: 'In a ranked war the chain bonus only counts on an enemy. Landing it on a hunt target wastes it.' };
+    }
+    if (chain?.bonusNext) {
+      return { tone: 'warn', text: `Chain bonus next (hit ${formatCount(chain.nextHit)}): check with your faction first`, title: 'The next faction hit is a chain bonus hit. Many factions save these for a chosen target.' };
+    }
+    if (ownWar) {
+      return { tone: 'warn', text: `Ranked war vs ${ownWar.enemyName || 'an enemy faction'}: hunt hits score nothing for it`, title: 'Only hits on the enemy faction count toward the war. Energy spent hunting is energy your faction does not get.' };
+    }
+    if (chain?.active && chain.timeoutLeft <= 90) {
+      return { tone: 'good', text: `Chain ${formatCount(chain.current)} · ${formatClock(chain.timeoutLeft)} left: a hunt win keeps it going`, title: 'Your faction chain is about to time out. Any win by a member adds a hit.' };
+    }
+    return null;
+  }
+
   function attackTargetSecondsLeft() {
     const until = getStatusUntil(attackTargetProfile?.status);
     return until === null ? null : Math.ceil(until - serverNowSec());
@@ -6630,6 +6802,10 @@
         // Chain state is throttled to 30 s internally; riding the status poll keeps the chip current for teammates' hits.
         await refreshOwnChain().catch(() => { /* handled inside */ });
         await refreshOwnBars().catch(() => { /* handled inside */ });
+        if (huntState.enabled) {
+          await refreshOwnWar().catch(() => { /* handled inside */ });
+          refreshTreats().catch(() => { /* handled inside */ });
+        }
       } catch (err) {
         if (err?.message !== 'API backoff active.') {
           registerApiFailure(err);
@@ -6886,6 +7062,7 @@
     if (!attackTickTimer) attackPageTick();
     attachAttackLogObserver();
     if (huntState.enabled) runHuntWorker(); // Stops by itself when the page is hidden.
+    if (huntState.enabled) refreshTreats().catch(() => { /* handled inside */ });
     refreshOwnBars().then(() => renderAttackPanel()).catch(() => { /* handled inside */ });
     // pageshow fires on the initial load too; do not double up a poll that is already pending or fresh.
     const statusAgeMs = attackStatusLastAt > 0 ? monotonicNowMs() - attackStatusLastAt : Number.POSITIVE_INFINITY;

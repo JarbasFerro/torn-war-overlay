@@ -4,6 +4,14 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.27.0 - Halloween treats on the hunt dock, faction guard and shared design system
+
+- Treat counter: while Torn's Halloween competition runs, the hunt dock shows your treat total (`🍬1,234`) from Torn's official `/user/competition`, which works with a Public key. It is read once when hunting starts, 4 and 15 seconds after each fight (the count lags the page), and otherwise every 5 minutes, so about one extra request per fight. After a win the result line shows `🍬 +N` or `no treat`, the session line adds today's gain, and the details show measured treats per fight and per 100 energy. Outside the event the chip stays hidden and the endpoint is checked again after 30 minutes.
+- Finish hint: the dock no longer reuses the war rule ("Hospitalize, they are active right now"). Hunt targets are random players, so it always says Leave, and during the event adds to land the last hit with a scary weapon (+10% treat chance with the "Here's Johnny" upgrade).
+- Faction guard: a line above the hint warns when the next faction chain hit is a bonus hit (red during a ranked war, where the bonus only counts on an enemy), when your faction is in a ranked war (hunt hits score nothing for it), and when a chain is about to time out and a hunt win would keep it going. The minimised pill shows `⚠` for the red case. Your own ranked war is read from `/faction/wars` every 5 minutes while hunting.
+- Design: every surface now uses the design system shared with Torn Market Edge (`docs/DESIGN.md`): `--two-*` tokens with the same values as Market Edge's, following Torn's light and dark mode, a 3 px state edge on floating surfaces, one type and radius scale, and green for best and primary actions.
+- The hunt session in `two.hunt.v1` also stores the treat total at the first reading of the day and the fights finished since.
+
 ## 0.26.0 - Torn PDA tab awareness, tools sheet and native toasts
 
 - In Torn PDA the script asks the app whether its tab is the one on screen and whether the browser is showing (`PDA_getTabState`), every 2 seconds. When it is not, the page pauses exactly as if it were hidden: no hunt scanning, no status or energy polls, no faction refreshes. iOS cannot pause background Torn PDA tabs, so before this an attack page left open in another tab kept spending the shared 100-requests-a-minute budget. On startup the script waits up to 1 second for the first answer, so a tab opened in the background never starts with a burst of requests. If the app does not answer, the script falls back to page visibility as before.
