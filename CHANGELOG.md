@@ -4,6 +4,10 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.28.1 - Attack links go straight to page.php
+
+- The hunt dock's `NEXT`/`Skip`, the war panel's next-target link and the explain sheet's attack button now open `page.php?sid=attack`. Torn has retired `loader.php` for attacks, so the old links showed "This endpoint is no longer available" and a redirect toast in Torn PDA before the attack page loaded.
+
 ## 0.28.0 - Hunt scans newer accounts
 
 - The hunt scanner now walks player IDs upward from your own ID + 1 instead of downward. Higher IDs are newer accounts, which are weaker on average, so more of each scan should qualify; walking down went into older, generally stronger accounts.

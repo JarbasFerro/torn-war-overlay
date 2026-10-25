@@ -194,7 +194,7 @@ if (huntUrls.filter(url => url.includes('/user/2001/')).length > 0) { failed = t
 const dock = hunt.dock;
 if (!dock || dock.hidden) { failed = true; console.error('Hunt mode: bottom dock not shown'); }
 if (hunt.panel && !hunt.panel.hidden) { failed = true; console.error('Hunt mode: the war panel should be hidden while hunting'); }
-if (!dock?.__link || dock.__link.hidden || !String(dock.__link.href || '').includes('user2ID=2001') || !/^Skip ▸ Ghost · L3$/.test(dock.__linkMain.textContent)) {
+if (!dock?.__link || dock.__link.hidden || !String(dock.__link.href || '').startsWith('/page.php?sid=attack&user2ID=2001') || !/^Skip ▸ Ghost · L3$/.test(dock.__linkMain.textContent)) {
   failed = true; console.error('Hunt mode: dock NEXT button for the refreshed target missing', dock?.__linkMain?.textContent, dock?.__link?.href);
 }
 if (!/^\d+$/.test(dock?.__pumpCount?.textContent || '')) { failed = true; console.error('Hunt mode: ready count missing on the hunt button'); }

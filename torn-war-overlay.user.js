@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.28.0
+// @version      0.28.1
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling, plus a hunt mode that scans for easy wins.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -34,7 +34,7 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const SCRIPT_VERSION = '0.28.0';
+  const SCRIPT_VERSION = '0.28.1';
   const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0260__';
   if (window[INSTANCE_KEY]) {
     console.warn(`[${SCRIPT}] v0.26.0 is already running; duplicate injection ignored.`);
@@ -1495,7 +1495,7 @@
     sheet.dataset.twoSignature = signature;
     sheet.__twoFacts.replaceChildren(...facts.map(line => { const row = document.createElement('div'); row.textContent = line; return row; }));
     sheet.__twoBody.replaceChildren(...lines.map(line => { const row = document.createElement('div'); row.textContent = line; return row; }));
-    sheet.__twoAttack.href = `/loader.php?sid=attack&user2ID=${userId}`;
+    sheet.__twoAttack.href = `/page.php?sid=attack&user2ID=${userId}`;
     sheet.__twoProfile.href = `/profiles.php?XID=${userId}`;
   }
 
@@ -6523,7 +6523,7 @@
     dock.__link.hidden = !showLink;
     dock.__waiting.hidden = showLink;
     if (showLink) {
-      dock.__link.href = `/loader.php?sid=attack&user2ID=${huntNext.userId}`;
+      dock.__link.href = `/page.php?sid=attack&user2ID=${huntNext.userId}`;
       setClass(dock.__link, `two-hd-next${hot ? ' two-hd-next-hot' : ''}`);
       setText(dock.__linkMain, `${hot ? 'NEXT' : 'Skip'} ▸ ${huntNext.name}${Number(huntNext.level) > 0 ? ` · L${huntNext.level}` : ''}`);
       const pct = Math.round((Number(entry?.r) || 0) * 100);
@@ -7064,7 +7064,7 @@
     }
     const link = document.createElement('a');
     link.className = 'two-attack-next-link';
-    link.href = `/loader.php?sid=attack&user2ID=${attackNextTarget.userId}`;
+    link.href = `/page.php?sid=attack&user2ID=${attackNextTarget.userId}`;
     const level = Number.isFinite(Number(attackNextTarget.level)) ? ` [${attackNextTarget.level}]` : '';
     link.textContent = `${attackNextTarget.name}${level} ▸`;
     link.title = attackNextTarget.bonusNext ? 'Safest proven target for the bonus hit' : 'Highest expected value among green targets right now';
