@@ -4,6 +4,10 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.27.2 - Basket thresholds are lifetime totals
+
+- v0.27.1 used the Trick or Treat wiki's per-step amounts (5, 10, 25 …) as if they were lifetime totals, so "next basket" named the wrong number. The 2025 forum guide's table gives the running totals, and the dock now uses them: Creepy 5, Freaky 15, Frightful 40, Haunting 90, Shocking 190, Terrifying 440, Horrifying 940, Petrifying 1,940 and Nightmarish 4,440 lifetime treats from attacks.
+
 ## 0.27.1 - Basket ladder from the Trick or Treat wiki
 
 - The hunt details and the `🍬` chip now show your basket's base treat chance and the next basket, from the Trick or Treat wiki (read 25 Oct 2026): 35% on Spooky plus 5% per basket up to 80% on Nightmarish, and the thresholds 5, 10, 25, 50, 100, 250, 500, 1,000 and 2,500 treats earned from attacks.

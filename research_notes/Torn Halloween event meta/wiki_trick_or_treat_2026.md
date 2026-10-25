@@ -14,7 +14,9 @@ Source: https://wiki.torn.com/wiki/Trick_or_Treat, transcribed from 25 phone scr
 - A basket stays on the account forever, does not need rebuying, cannot be traded.
 - Basket upgrades automatically. Only treats earned through attacks trigger evolution; treats gained through upgrades do not.
 
-| Basket | Treats needed |
+**Correction (from the 2025 forum guide):** this column is the treats needed per step, not a lifetime total. The lifetime totals are 0, 5, 15, 40, 90, 190, 440, 940, 1,940 and 4,440; see forum_halloween_guide_2025.md.
+
+| Basket | Treats needed (per step) |
 |---|---|
 | Spooky | 0 |
 | Creepy | 5 |

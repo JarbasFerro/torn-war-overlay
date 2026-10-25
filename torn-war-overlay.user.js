@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.27.1
+// @version      0.27.2
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling, plus a hunt mode that scans for easy wins.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -34,7 +34,7 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const SCRIPT_VERSION = '0.27.1';
+  const SCRIPT_VERSION = '0.27.2';
   const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0260__';
   if (window[INSTANCE_KEY]) {
     console.warn(`[${SCRIPT}] v0.26.0 is already running; duplicate injection ignored.`);
@@ -6524,11 +6524,12 @@
     if (huntDetailOpen) renderHuntDetail(dock.__detail, { ready, nowSec, intel, userId });
   }
 
-  // Basket ladder from the Trick or Treat wiki (read 25 Oct 2026): lifetime treats earned from attacks to reach each
-  // basket, and 35% base treat chance plus 5% per basket above Spooky. Apocalyptic only comes from summoning M'aol.
+  // Basket ladder (Trick or Treat wiki and the 2025 forum guide, read 25 Oct 2026): lifetime treats earned from attacks
+  // to reach each basket (the wiki lists the per-step amounts 5, 10, 25 …; these are the running totals), and 35% base
+  // treat chance plus 5% per basket above Spooky. Apocalyptic only comes from summoning M'aol.
   const HUNT_BASKETS = Object.freeze([
-    ['Spooky', 0], ['Creepy', 5], ['Freaky', 10], ['Frightful', 25], ['Haunting', 50], ['Shocking', 100],
-    ['Terrifying', 250], ['Horrifying', 500], ['Petrifying', 1_000], ['Nightmarish', 2_500],
+    ['Spooky', 0], ['Creepy', 5], ['Freaky', 15], ['Frightful', 40], ['Haunting', 90], ['Shocking', 190],
+    ['Terrifying', 440], ['Horrifying', 940], ['Petrifying', 1_940], ['Nightmarish', 4_440],
   ]);
 
   function huntBasketInfo(basketName) {

@@ -200,7 +200,7 @@ if (!dock?.__link || dock.__link.hidden || !String(dock.__link.href || '').inclu
 if (!/^\d+$/.test(dock?.__pumpCount?.textContent || '')) { failed = true; console.error('Hunt mode: ready count missing on the hunt button'); }
 if (dock?.__treats?.hidden || dock?.__treats?.textContent !== '🍬1,234') { failed = true; console.error('Hunt mode: treat counter from /user/competition missing', dock?.__treats?.textContent); }
 if (!/^If you win: Leave, and land the last hit with a scary weapon$/.test(dock?.__hint?.textContent || '')) { failed = true; console.error('Hunt mode: Halloween finish hint missing', dock?.__hint?.textContent); }
-if (!/Creepy basket: 40% base chance, next Freaky at 10 attack treats/.test(dock?.__treats?.title || '')) { failed = true; console.error('Hunt mode: basket chance and next tier missing', dock?.__treats?.title); }
+if (!/Creepy basket: 40% base chance, next Freaky at 15 attack treats/.test(dock?.__treats?.title || '')) { failed = true; console.error('Hunt mode: basket chance and next tier missing', dock?.__treats?.title); }
 if (huntSaved.session?.t0 !== 1234) { failed = true; console.error('Hunt mode: treat baseline not saved in the session', huntSaved.session); }
 if (dock?.__energy?.textContent !== '⚡4') { failed = true; console.error('Hunt mode: energy should be read with the Limited key (100 energy = 4 hits)', dock?.__energy?.textContent, dock?.__energy?.title); }
 
