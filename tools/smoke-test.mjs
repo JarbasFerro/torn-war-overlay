@@ -12,107 +12,10 @@
 //      becomes active, the storage move shows a native toast, and the userscript menu mirrors the tools list;
 //   7. the home page shows the hunt card only while hunting;
 //   8. an unrelated page: the script does not run.
+// Runs on the fake clock in tools/harness.mjs: waitMs is virtual time.
 // Run: node tools/smoke-test.mjs
 
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
-import vm from 'node:vm';
-
-const here = path.dirname(fileURLToPath(import.meta.url));
-const source = readFileSync(path.join(here, '..', 'torn-war-overlay.user.js'), 'utf8');
-
-function makeElement(tag = 'div') {
-  const element = {
-    tagName: String(tag).toUpperCase(),
-    children: [],
-    dataset: {},
-    style: {},
-    className: '',
-    textContent: '',
-    hidden: false,
-    title: '',
-    type: '',
-    classList: {
-      add() {}, remove() {}, toggle() { return false; }, contains() { return false; },
-    },
-    setAttribute() {}, getAttribute() { return null; },
-    appendChild(child) { this.children.push(child); return child; },
-    append(...nodes) { this.children.push(...nodes); },
-    prepend(...nodes) { this.children.unshift(...nodes); },
-    before() {}, replaceChildren(...nodes) { this.children = nodes; },
-    querySelector() { return null; }, querySelectorAll() { return []; },
-    addEventListener() {}, removeEventListener() {},
-    closest() { return null; },
-    cloneNode() { return makeElement(tag); },
-    get isConnected() { return true; },
-  };
-  return element;
-}
-
-async function boot({ pathname, search, seed = {}, fetchImpl = null, waitMs = 150, globals = {} }) {
-  const errors = [];
-  const warnings = [];
-  const storage = new Map(Object.entries(seed));
-  let promptCalls = 0;
-  const menu = [];
-
-  const head = makeElement('head');
-  const body = makeElement('body');
-  const document = {
-    hidden: false,
-    head,
-    body,
-    documentElement: makeElement('html'),
-    hasFocus: () => true,
-    getElementById: () => null,
-    createElement: makeElement,
-    querySelector: () => null,
-    querySelectorAll: () => [],
-    addEventListener() {},
-    removeEventListener() {},
-  };
-
-  const sandbox = {
-    console: {
-      log: () => {},
-      info: () => {},
-      warn: (...args) => warnings.push(args.map(String).join(' ')),
-      error: (...args) => errors.push(args.map(String).join(' ')),
-    },
-    location: { hostname: 'www.torn.com', pathname, search },
-    document,
-    localStorage: {
-      getItem: key => (storage.has(key) ? storage.get(key) : null),
-      setItem: (key, value) => storage.set(key, String(value)),
-      removeItem: key => storage.delete(key),
-      get length() { return storage.size; },
-      key: index => Array.from(storage.keys())[index] ?? null,
-    },
-    performance: { now: () => Number(process.hrtime.bigint() / 1_000_000n) },
-    setTimeout, clearTimeout, setInterval, clearInterval,
-    requestAnimationFrame: callback => setTimeout(callback, 0),
-    cancelAnimationFrame: id => clearTimeout(id),
-    MutationObserver: class { observe() {} disconnect() {} },
-    AbortController,
-    fetch: fetchImpl || (() => Promise.reject(new Error('network disabled in smoke test'))),
-    history: { pushState() {}, replaceState() {} },
-    URL, URLSearchParams,
-  };
-  sandbox.GM_registerMenuCommand = label => menu.push(label);
-  Object.assign(sandbox, globals);
-  sandbox.window = sandbox;
-  sandbox.globalThis = sandbox;
-  sandbox.prompt = () => { promptCalls += 1; return null; };
-  sandbox.alert = () => {};
-  sandbox.confirm = () => true;
-  sandbox.addEventListener = () => {};
-
-  vm.createContext(sandbox);
-  vm.runInContext(source, sandbox, { filename: 'torn-war-overlay.user.js' });
-  await new Promise(resolve => setTimeout(resolve, waitMs));
-  return { errors, warnings, promptCalls, storage, menu, mounted: body.children.length, panel: body.children.find(node => node.__twoName) || null, dock: body.children.find(node => node.__twoHuntDock) || null, home: body.children.find(node => node.__twoHomeCard) || null, body };
-}
+import { boot } from './harness.mjs';
 
 let failed = false;
 
@@ -288,7 +191,7 @@ if (homeOff.home || homeOff.errors.length > 0) { failed = true; console.error('H
 // Torn PDA native storage, modelled on userscripts/TornPDA_Storage.md: async, JSON values, setMany/getMany batches.
 function makePdaStorage({ failLoad = false, corruptReadBack = false } = {}) {
   const data = new Map();
-  const later = value => new Promise(resolve => setTimeout(() => resolve(value), 5));
+  const later = value => new Promise(resolve => setImmediate(() => resolve(value))); // Async like the app, no real wait.
   return {
     data,
     loadAll: () => (failLoad ? Promise.reject(new Error('bridge down')) : later(Object.fromEntries(data))),
@@ -344,8 +247,7 @@ const pdaRuntime = {
   },
   PDA_storage: makePdaStorage(),
 };
-setTimeout(() => { tabState.isActiveTab = true; }, 2_500); // The user switches to this tab.
-const pdaTab = await boot({ pathname: '/loader.php', search: '?sid=attack&user2ID=123456', seed: pdaSeed, globals: pdaRuntime, waitMs: 5_500 });
+const pdaTab = await boot({ pathname: '/loader.php', search: '?sid=attack&user2ID=123456', seed: pdaSeed, globals: pdaRuntime, waitMs: 5_500, at: { 2_500: () => { tabState.isActiveTab = true; } } }); // The user switches to this tab.
 if (pdaTab.errors.length > 0) { failed = true; console.error('PDA TAB ERRORS:', pdaTab.errors.join('\n')); }
 const firstScanAt = pdaUrls.findIndex(url => url.includes('/user/1003/profile'));
 const tabAnswersBeforeScan = bridgeCalls.slice(0, Math.max(0, bridgeCalls.length)).filter(([name]) => name === 'PDA_getTabState').length;

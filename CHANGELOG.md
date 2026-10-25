@@ -4,6 +4,13 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.34.0 - Fast, table-driven tests
+
+- New `tools/unit-tests.mjs` (`node --test`, 10 tests, about 50 ms): the basket ladder against your basket page ("100 / 250") and the Torn City Times table, the Halloweek window edges, the hit-goal tally (each fight once, wins only) and pace across a TCT midnight, chain bonus hits, the finish hint, API error kinds, attack results, ranked-war state and hunt skips. Three of the last five regressions (basket thresholds, goal baselines, day maths) are exactly this kind of maths and would now fail before release.
+- The script exposes its pure functions to a test hook that only a test sandbox defines; on Torn pages this costs one check at startup. The hit-goal tally and summary were split into pure functions (`tallyOutgoingAttacks`, `hitGoalSummary`) for this.
+- `tools/harness.mjs`: the browser stand-in is shared by both suites and runs on a fake clock, so the smoke test takes about 0.1 s instead of about 24 s and no longer depends on real sleeps. Each suite was checked by breaking the code on purpose and seeing it fail.
+- No behaviour change for players.
+
 ## 0.33.0 - One attack-log pipeline
 
 - The three readers of your attack log (war dots and personal intel on the faction page, the quick intel read on the attack page, and hit goals) now share one paging routine and one hand-off: every fight fetched by any of them also updates your hit goals, counted once by fight id.

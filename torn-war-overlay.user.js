@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.33.0
+// @version      0.34.0
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling, plus a hunt mode that scans for easy wins.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -36,7 +36,7 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const SCRIPT_VERSION = '0.33.0';
+  const SCRIPT_VERSION = '0.34.0';
   const INSTANCE_KEY = '__TORN_WAR_OVERLAY__';
   if (window[INSTANCE_KEY]) {
     console.warn(`[${SCRIPT}] v${window[INSTANCE_KEY]} is already running; duplicate injection of v${SCRIPT_VERSION} ignored.`);
@@ -4338,20 +4338,27 @@
 
   // Hit goals take every fight any reader fetched. Once the goals' own first walk is done, a complete newest page that
   // reaches back past the goals cursor covers everything since it, so the goals poll can wait.
-  function noteOutgoingAttacks(attacks, { from = 0, newest = false, complete = false } = {}) {
-    if (!Array.isArray(attacks) || !attacks.length) return;
-    const windowStart = hitWindowStart();
-    let changed = false;
-    let newestStarted = 0;
-    for (const raw of attacks) {
+  // Pure: adds each fight (id, start time, win or not) to `seen` once; fights before windowStart are ignored.
+  function tallyOutgoingAttacks(seen, attacks, windowStart) {
+    let added = 0;
+    let newest = 0;
+    for (const raw of Array.isArray(attacks) ? attacks : []) {
       const id = String(raw?.id ?? raw?.code ?? '');
       const started = Number(raw?.started);
       if (!id || !Number.isFinite(started)) continue;
-      newestStarted = Math.max(newestStarted, started);
-      if (started < windowStart || hitGoals.seen[id]) continue;
-      hitGoals.seen[id] = [started, classifyAttackResult(raw?.result).kind === 'win' ? 1 : 0];
-      changed = true;
+      newest = Math.max(newest, started);
+      if (started < windowStart || seen[id]) continue;
+      seen[id] = [started, classifyAttackResult(raw?.result).kind === 'win' ? 1 : 0];
+      added += 1;
     }
+    return { added, newest };
+  }
+
+  function noteOutgoingAttacks(attacks, { from = 0, newest = false, complete = false } = {}) {
+    if (!Array.isArray(attacks) || !attacks.length) return;
+    const tally = tallyOutgoingAttacks(hitGoals.seen, attacks, hitWindowStart());
+    let changed = tally.added > 0;
+    const newestStarted = tally.newest;
     if (newest && complete && hitGoals.cursor > 0 && hitGoals.fillTo === null && from <= hitGoals.cursor) {
       hitGoals.cursor = Math.max(hitGoals.cursor, newestStarted);
       hitWonAt = Date.now();
@@ -6770,31 +6777,40 @@
     return flight;
   }
 
-  function hitWinsBetween(fromSec, toSec) {
+  function winsBetween(seen, fromSec, toSec) {
     let wins = 0;
-    for (const [started, won] of Object.values(hitGoals.seen)) if (won && started >= fromSec && started < toSec) wins += 1;
+    for (const [started, won] of Object.values(seen)) if (won && started >= fromSec && started < toSec) wins += 1;
     return wins;
+  }
+
+  // Pure: today's wins (TCT day of nowSec) and, during Halloweek, the event total and the pace to the event goal.
+  function hitGoalSummary(seen, goals, nowSec) {
+    const dayStart = Math.floor(nowSec / 86400) * 86400; // TCT is UTC.
+    const today = winsBetween(seen, dayStart, dayStart + 86400);
+    const summary = { today, dayGoal: goals.day, dayDone: today >= goals.day, event: null };
+    const window = halloweekWindow(nowSec);
+    if (window.active) {
+      const hits = winsBetween(seen, window.start, window.end);
+      const daysLeft = Math.max(1, Math.ceil((window.end - nowSec) / 86400));
+      const left = Math.max(0, goals.event - hits);
+      const elapsed = Math.min(1, Math.max(0, (nowSec - window.start) / (window.end - window.start)));
+      summary.event = { hits, goal: goals.event, left, daysLeft, perDay: Math.ceil(left / daysLeft), onPace: hits >= Math.floor(goals.event * elapsed) };
+    }
+    return summary;
   }
 
   function hitGoalView(nowSec = serverNowSec()) {
     if (hitUnsupported) return { text: '🎯 Hit goals need a Limited key: Tools → Set attack-history key', title: 'Wins are counted from your attack log, which needs a Limited (or Custom) key.', tone: 'warn' };
     if (hitWonNow === null) return null;
-    const dayStart = Date.parse(`${huntTodayKey()}T00:00:00Z`) / 1000;
-    const today = hitWinsBetween(dayStart, dayStart + 86400);
-    const event = halloweekWindow(nowSec);
-    const parts = [`Today ${formatCount(today)}/${formatCount(hitGoals.day)}${today >= hitGoals.day ? ' ✓' : ''}`];
-    const notes = [`Today: ${formatCount(today)} wins since 00:00 TCT; daily goal ${formatCount(hitGoals.day)}.`];
-    let tone = today >= hitGoals.day ? 'good' : 'warn';
-    if (event.active) {
-      const eventHits = hitWinsBetween(event.start, event.end);
-      parts.push(`Event ${formatCount(eventHits)}/${formatCount(hitGoals.event)}${eventHits >= hitGoals.event ? ' ✓' : ''}`);
-      const daysLeft = Math.max(1, Math.ceil((event.end - nowSec) / 86400));
-      const left = Math.max(0, hitGoals.event - eventHits);
-      const perDay = Math.ceil(left / daysLeft);
-      const elapsed = Math.min(1, Math.max(0, (nowSec - event.start) / (event.end - event.start)));
-      const onPace = eventHits >= Math.floor(hitGoals.event * elapsed);
-      if (left > 0 && !onPace) { parts.push(`need ${formatCount(perDay)}/day`); tone = 'warn'; }
-      notes.push(`Halloweek (25 Oct to 1 Nov TCT): ${formatCount(eventHits)} wins; goal ${formatCount(hitGoals.event)}, ${formatCount(left)} to go over ${daysLeft} day${daysLeft === 1 ? '' : 's'} (${formatCount(perDay)} a day). ${onPace ? 'On pace.' : 'Behind pace.'}`);
+    const sum = hitGoalSummary(hitGoals.seen, hitGoals, nowSec);
+    const parts = [`Today ${formatCount(sum.today)}/${formatCount(sum.dayGoal)}${sum.dayDone ? ' ✓' : ''}`];
+    const notes = [`Today: ${formatCount(sum.today)} wins since 00:00 TCT; daily goal ${formatCount(sum.dayGoal)}.`];
+    let tone = sum.dayDone ? 'good' : 'warn';
+    const event = sum.event;
+    if (event) {
+      parts.push(`Event ${formatCount(event.hits)}/${formatCount(event.goal)}${event.left === 0 ? ' ✓' : ''}`);
+      if (event.left > 0 && !event.onPace) { parts.push(`need ${formatCount(event.perDay)}/day`); tone = 'warn'; }
+      notes.push(`Halloweek (25 Oct to 1 Nov TCT): ${formatCount(event.hits)} wins; goal ${formatCount(event.goal)}, ${formatCount(event.left)} to go over ${event.daysLeft} day${event.daysLeft === 1 ? '' : 's'} (${formatCount(event.perDay)} a day). ${event.onPace ? 'On pace.' : 'Behind pace.'}`);
     }
     return { text: `🎯 ${parts.join(' · ')}`, title: `${notes.join(' ')} Counted fight by fight from your attack log (wins only), so fights without the script count too. Change the goals in Tools.`, tone };
   }
@@ -7622,6 +7638,18 @@
       flushPersistentState();
     });
     window.addEventListener('pageshow', () => resumeForegroundWork());
+  }
+
+  // Test hook (v0.34): tools/unit-tests.mjs boots the script in a sandbox that defines __TWO_TEST_HOOK__ and receives the
+  // pure functions below. Torn pages never define it, so this is one typeof check at startup.
+  if (typeof globalThis.__TWO_TEST_HOOK__ === 'function') {
+    globalThis.__TWO_TEST_HOOK__({
+      ApiError, apiErrorKind, isApiBackoff, classifyApiError,
+      huntBasketProgress, huntBasketLine, halloweekWindow,
+      tallyOutgoingAttacks, hitGoalSummary,
+      isChainBonusHit, finishHintFor, classifyAttackResult, classifyFightLine, normalizeAttack, normalizeRankedWar,
+      classifyHuntProfile,
+    });
   }
 
   init().catch(err => console.error(`[${SCRIPT}] Initialization failed`, err));

@@ -156,10 +156,15 @@ v0.14 implements the first stage of that roadmap: observed Fair Fight memory, pe
 
 ## Development
 
-There is no build step. `tools/smoke-test.mjs` boots the userscript in Node with a minimal browser stub and fails if the script's built-in self-tests report a fault:
+There is no build step. Two test suites run in Node, with no dependencies:
+
+- `tools/unit-tests.mjs` (`node --test`): table-driven tests of the pure logic (basket ladder, Halloweek window, hit-goal tally and pace, chain bonus hits, finish hint, API error kinds, attack results, ranked-war state, hunt skips), using real numbers from the game. The script hands these functions to the tests through a hook that only a test sandbox defines.
+- `tools/smoke-test.mjs`: boots the whole userscript per page (faction, attack, hunt, home, Torn PDA storage and tabs, request budget) and fails if the built-in self-tests report a fault.
+
+Both share `tools/harness.mjs`, a minimal browser stand-in with a fake clock: script time is virtual, so a scenario that needs several seconds of timers runs in milliseconds and never waits on real sleeps.
 
 ```
-node --check torn-war-overlay.user.js && node tools/smoke-test.mjs
+node --check torn-war-overlay.user.js && node --test tools/unit-tests.mjs && node tools/smoke-test.mjs
 ```
 
 ## Support
