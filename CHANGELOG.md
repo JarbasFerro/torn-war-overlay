@@ -4,6 +4,11 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.27.1 - Basket ladder from the Trick or Treat wiki
+
+- The hunt details and the `🍬` chip now show your basket's base treat chance and the next basket, from the Trick or Treat wiki (read 25 Oct 2026): 35% on Spooky plus 5% per basket up to 80% on Nightmarish, and the thresholds 5, 10, 25, 50, 100, 250, 500, 1,000 and 2,500 treats earned from attacks.
+- The finish hint's explanation says what the wiki confirms: leave, mug and hospitalize all give the same treat chance, so Leave is only about getting the target back sooner.
+
 ## 0.27.0 - Halloween treats on the hunt dock, faction guard and shared design system
 
 - Treat counter: while Torn's Halloween competition runs, the hunt dock shows your treat total (`🍬1,234`) from Torn's official `/user/competition`, which works with a Public key. It is read once when hunting starts, 4 and 15 seconds after each fight (the count lags the page), and otherwise every 5 minutes, so about one extra request per fight. After a win the result line shows `🍬 +N` or `no treat`, the session line adds today's gain, and the details show measured treats per fight and per 100 energy. Outside the event the chip stays hidden and the endpoint is checked again after 30 minutes.

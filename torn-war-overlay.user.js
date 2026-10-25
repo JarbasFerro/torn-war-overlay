@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.27.0
+// @version      0.27.1
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling, plus a hunt mode that scans for easy wins.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -34,7 +34,7 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const SCRIPT_VERSION = '0.27.0';
+  const SCRIPT_VERSION = '0.27.1';
   const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0260__';
   if (window[INSTANCE_KEY]) {
     console.warn(`[${SCRIPT}] v0.26.0 is already running; duplicate injection ignored.`);
@@ -6460,7 +6460,7 @@
     dock.__treats.hidden = !treats;
     if (treats) {
       setText(dock.__treats, `🍬${formatCount(treats.total)}`);
-      dock.__treats.title = `${formatCount(treats.total)} Halloween treats collected${treats.basket ? ` · ${treats.basket}` : ''}`;
+      dock.__treats.title = `${formatCount(treats.total)} Halloween treats collected${treats.basket ? ` · ${huntBasketText(treats.basket)}` : ''}. Wear one scary clothing item and finish with a scary weapon for +10% each.`;
     }
 
     dock.__guard.hidden = !guard;
@@ -6478,7 +6478,7 @@
         ? 'If you win: Leave, and land the last hit with a scary weapon'
         : 'If you win: Leave, so they are back for another hit sooner');
       dock.__hint.title = treats
-        ? 'Leave keeps their hospital stay shortest, so they come back as a target sooner. A scary weapon (axe, chainsaw, sickle and others) on the final hit adds 10% treat chance once you own the "Here\'s Johnny" basket upgrade.'
+        ? 'Every finish (leave, mug, hospitalize) gives the same treat chance; Leave keeps their hospital stay shortest, so they come back as a target sooner. A scary weapon (axe, chainsaw, sickle and others) on the final hit adds 10% treat chance once you own the "Here\'s Johnny" basket upgrade.'
         : 'Leave keeps their hospital stay shortest, so they come back as a target sooner.';
     }
     dock.__result.hidden = !result;
@@ -6524,9 +6524,30 @@
     if (huntDetailOpen) renderHuntDetail(dock.__detail, { ready, nowSec, intel, userId });
   }
 
+  // Basket ladder from the Trick or Treat wiki (read 25 Oct 2026): lifetime treats earned from attacks to reach each
+  // basket, and 35% base treat chance plus 5% per basket above Spooky. Apocalyptic only comes from summoning M'aol.
+  const HUNT_BASKETS = Object.freeze([
+    ['Spooky', 0], ['Creepy', 5], ['Freaky', 10], ['Frightful', 25], ['Haunting', 50], ['Shocking', 100],
+    ['Terrifying', 250], ['Horrifying', 500], ['Petrifying', 1_000], ['Nightmarish', 2_500],
+  ]);
+
+  function huntBasketInfo(basketName) {
+    const name = String(basketName || '').toLowerCase();
+    const index = HUNT_BASKETS.findIndex(([tier]) => name.includes(tier.toLowerCase()));
+    if (index < 0) return null;
+    const next = HUNT_BASKETS[index + 1] || null;
+    return { tier: HUNT_BASKETS[index][0], chance: 35 + 5 * index, next: next ? { tier: next[0], at: next[1] } : null };
+  }
+
+  function huntBasketText(basketName) {
+    const info = huntBasketInfo(basketName);
+    if (!info) return basketName || '';
+    return `${info.tier} basket: ${info.chance}% base chance${info.next ? `, next ${info.next.tier} at ${formatCount(info.next.at)} attack treats` : ''}`;
+  }
+
   // Measured yield: treats gained today divided by fights finished since the first treat reading. 25 energy a fight.
   function huntTreatsLine(session) {
-    const head = `Treats: ${formatCount(huntTreats.total)} collected${huntTreats.basket ? ` · ${huntTreats.basket}` : ''}`;
+    const head = `Treats: ${formatCount(huntTreats.total)} collected${huntTreats.basket ? ` · ${huntBasketText(huntTreats.basket)}` : ''}`;
     if (session.t0 === null) return `${head}.`;
     const gained = huntTreats.total - session.t0;
     if (session.ta <= 0) return `${head} · +${formatCount(gained)} today, no fights counted yet.`;
