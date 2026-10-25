@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.30.0
+// @version      0.30.1
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling, plus a hunt mode that scans for easy wins.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -38,7 +38,7 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const SCRIPT_VERSION = '0.30.0';
+  const SCRIPT_VERSION = '0.30.1';
   const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0260__';
   if (window[INSTANCE_KEY]) {
     console.warn(`[${SCRIPT}] v0.26.0 is already running; duplicate injection ignored.`);
@@ -6571,26 +6571,32 @@
     return { tier: HUNT_BASKETS[index][0], chance: 35 + 5 * index, next: next ? { tier: next[0], at: next[1] } : null };
   }
 
-  // Hit goals (v0.30): wins today and during Halloweek, from Torn's own "attacks won" stat, so fights made without the
-  // script count too. Now minus the value at 00:00 TCT today, and now minus the value at the event start (25 Oct 00:00
-  // TCT, 8 days to 1 Nov 23:59 TCT). Past values come from /user/personalstats?stat=attackswon&timestamp=… (Torn keeps
-  // daily snapshots); if that fails, the first reading of the day or event is the baseline instead.
+  // Hit goals (v0.30.1): wins today and during Halloweek, counted fight by fight from your own attack log
+  // (/user/attacks, outgoing, Limited key), so fights made without the script count too. v0.30.0 subtracted Torn's
+  // daily "attacks won" history, which returned today's value rather than midnight's, so every count read 0.
+  // Each counted fight id is kept (pruned to the window), so overlapping pages never count twice. The first run reads
+  // back to 25 Oct 00:00 TCT (or 00:00 today outside Halloweek); later runs only fetch fights since the newest seen.
   const GOALS_STORAGE = 'two.goals.v1';
   const HIT_GOAL_DEFAULTS = Object.freeze({ day: 50, event: 400 });
   const HIT_REFRESH_MS = 2 * 60_000;
+  const HIT_PAGES_PER_REFRESH = 6;
   let hitGoals = loadHitGoals();
-  let hitWonNow = null;
+  let hitWonNow = null; // Non-null once the attack log has been read this page view.
   let hitWonAt = 0;
   let hitInFlight = null;
+  let hitUnsupported = false;
 
   function loadHitGoals() {
     const raw = loadObjectJson(GOALS_STORAGE, {});
     const goal = (value, fallback) => (Number.isFinite(Number(value)) && Number(value) > 0 ? Math.floor(Number(value)) : fallback);
+    const fresh = Number(raw.v) === 2; // v0.30.0 stored baselines instead of counts; start those over.
     return {
+      v: 2,
       day: goal(raw.day, HIT_GOAL_DEFAULTS.day),
       event: goal(raw.event, HIT_GOAL_DEFAULTS.event),
-      base: raw.base && typeof raw.base === 'object' ? raw.base : {}, // { 'YYYY-MM-DD': { v, src } }
-      eventBase: raw.eventBase && typeof raw.eventBase === 'object' ? raw.eventBase : null, // { year, v, src }
+      seen: fresh && raw.seen && typeof raw.seen === 'object' ? raw.seen : {}, // { attackId: [startedSec, won 0|1] }
+      cursor: fresh ? Number(raw.cursor) || 0 : 0, // Newest `started` already read.
+      fillTo: fresh && Number(raw.fillTo) > 0 ? Number(raw.fillTo) : null, // Older pages still to read (first run).
     };
   }
 
@@ -6601,45 +6607,57 @@
     return { year, start, end, active: nowSec >= start && nowSec < end };
   }
 
-  async function historicalWon(timestamp) {
-    try {
-      const data = await apiGet('/user/personalstats', { query: { stat: 'attackswon', timestamp } });
-      const stats = data?.personalstats;
-      const list = Array.isArray(stats) ? stats : stats && typeof stats === 'object' ? Object.entries(stats).map(([name, value]) => ({ name, value })) : [];
-      const hit = list.find(item => String(item?.name || '').toLowerCase() === 'attackswon');
-      const value = Number(hit?.value);
-      return Number.isFinite(value) && value >= 0 ? value : null;
-    } catch {
-      return null;
-    }
+  function hitWindowStart(nowSec = serverNowSec()) {
+    const event = halloweekWindow(nowSec);
+    const today = Date.parse(`${huntTodayKey()}T00:00:00Z`) / 1000;
+    return event.active ? event.start : today;
   }
 
   async function refreshHitCounts({ force = false } = {}) {
-    if (!apiKey || apiPermanentlyDisabled) return;
+    if (!apiKey || apiPermanentlyDisabled || hitUnsupported) return;
     if (hitInFlight) return hitInFlight;
     if (!force && Date.now() - hitWonAt < HIT_REFRESH_MS - 1_000) return;
     if (Date.now() < globalBackoffUntil) return;
     hitWonAt = Date.now();
     const flight = (async () => {
       try {
-        const data = await apiGet('/user/personalstats', { query: { cat: 'popular' }, cacheBust: true });
-        const won = Number(data?.personalstats?.attacking?.attacks?.won);
-        if (!Number.isFinite(won) || won < 0) return;
-        hitWonNow = won;
-        const nowSec = serverNowSec();
-        const day = huntTodayKey();
-        if (!hitGoals.base[day]) {
-          const past = await historicalWon(Date.parse(`${day}T00:00:00Z`) / 1000);
-          hitGoals.base = { [day]: past !== null && past <= won ? { v: past, src: 'api' } : { v: won, src: 'first' } };
+        if (!(await ensureAttackHistoryCapability())) { hitUnsupported = true; return; }
+        const nowSec = Math.floor(serverNowSec());
+        const windowStart = hitWindowStart(nowSec);
+        for (const [id, [started]] of Object.entries(hitGoals.seen)) if (started < windowStart - 86400) delete hitGoals.seen[id];
+        // An unfinished first run resumes its walk into older fights; otherwise read what is new since the cursor.
+        const backfilling = hitGoals.fillTo !== null && hitGoals.fillTo > windowStart;
+        const from = backfilling ? windowStart : Math.max(windowStart, hitGoals.cursor);
+        let to = backfilling ? hitGoals.fillTo : null;
+        let complete = false;
+        for (let page = 0; page < HIT_PAGES_PER_REFRESH; page += 1) {
+          const data = await apiGet('/user/attacks', {
+            query: { filters: 'outgoing', sort: 'DESC', limit: ATTACKS_PAGE_LIMIT, from, ...(to !== null ? { to } : {}) },
+            cacheBust: true,
+            keyOverride: attackApiKey || null,
+          });
+          const attacks = Array.isArray(data?.attacks) ? data.attacks : [];
+          let oldest = Number.POSITIVE_INFINITY;
+          for (const raw of attacks) {
+            const id = String(raw?.id ?? raw?.code ?? '');
+            const started = Number(raw?.started);
+            if (!id || !Number.isFinite(started)) continue;
+            oldest = Math.min(oldest, started);
+            hitGoals.cursor = Math.max(hitGoals.cursor, started);
+            if (!hitGoals.seen[id]) hitGoals.seen[id] = [started, classifyAttackResult(raw?.result).kind === 'win' ? 1 : 0];
+          }
+          // Newest first; a short page or no progress means everything since `from` is in. `to` is inclusive.
+          if (attacks.length < ATTACKS_PAGE_LIMIT || !Number.isFinite(oldest) || (to !== null && oldest >= to)) { complete = true; break; }
+          to = oldest;
         }
-        const event = halloweekWindow(nowSec);
-        if (event.active && Number(hitGoals.eventBase?.year) !== event.year) {
-          const past = await historicalWon(event.start);
-          hitGoals.eventBase = past !== null && past <= won ? { year: event.year, v: past, src: 'api' } : { year: event.year, v: won, src: 'first' };
-        }
+        if (complete) { if (backfilling || hitGoals.fillTo === null) hitGoals.fillTo = null; }
+        else hitGoals.fillTo = to; // More than HIT_PAGES_PER_REFRESH pages: continue from here next time.
+        hitWonNow = Object.keys(hitGoals.seen).length;
+        if (hitGoals.fillTo !== null) hitWonAt = Date.now() - HIT_REFRESH_MS + 5_000; // Finish the backfill soon.
         saveJson(GOALS_STORAGE, hitGoals);
       } catch (err) {
-        if (err?.message !== 'API backoff active.') console.warn(`[${SCRIPT}] Could not read your attacks won`, err);
+        if (Number(err?.code) === 16 || Number(err?.code) === 7) hitUnsupported = true;
+        else if (err?.message !== 'API backoff active.') console.warn(`[${SCRIPT}] Could not count your wins`, err);
       } finally {
         renderAttackPanel();
       }
@@ -6648,22 +6666,23 @@
     return flight;
   }
 
+  function hitWinsBetween(fromSec, toSec) {
+    let wins = 0;
+    for (const [started, won] of Object.values(hitGoals.seen)) if (won && started >= fromSec && started < toSec) wins += 1;
+    return wins;
+  }
+
   function hitGoalView(nowSec = serverNowSec()) {
+    if (hitUnsupported) return { text: '🎯 Hit goals need a Limited key: Tools → Set attack-history key', title: 'Wins are counted from your attack log, which needs a Limited (or Custom) key.', tone: 'warn' };
     if (hitWonNow === null) return null;
-    const dayBase = hitGoals.base[huntTodayKey()];
-    const today = dayBase ? Math.max(0, hitWonNow - dayBase.v) : null;
+    const dayStart = Date.parse(`${huntTodayKey()}T00:00:00Z`) / 1000;
+    const today = hitWinsBetween(dayStart, dayStart + 86400);
     const event = halloweekWindow(nowSec);
-    const eventBase = event.active && Number(hitGoals.eventBase?.year) === event.year ? hitGoals.eventBase : null;
-    const eventHits = eventBase ? Math.max(0, hitWonNow - eventBase.v) : null;
-    const parts = [];
-    const notes = [];
-    let tone = 'good';
-    if (today !== null) {
-      parts.push(`Today ${formatCount(today)}/${formatCount(hitGoals.day)}${today >= hitGoals.day ? ' ✓' : ''}`);
-      if (today < hitGoals.day) tone = 'warn';
-      notes.push(`Today: ${formatCount(today)} wins since 00:00 TCT${dayBase.src === 'first' ? ` (counted from the first reading today; Torn's midnight value was unavailable)` : ''}; daily goal ${formatCount(hitGoals.day)}.`);
-    }
-    if (eventHits !== null) {
+    const parts = [`Today ${formatCount(today)}/${formatCount(hitGoals.day)}${today >= hitGoals.day ? ' ✓' : ''}`];
+    const notes = [`Today: ${formatCount(today)} wins since 00:00 TCT; daily goal ${formatCount(hitGoals.day)}.`];
+    let tone = today >= hitGoals.day ? 'good' : 'warn';
+    if (event.active) {
+      const eventHits = hitWinsBetween(event.start, event.end);
       parts.push(`Event ${formatCount(eventHits)}/${formatCount(hitGoals.event)}${eventHits >= hitGoals.event ? ' ✓' : ''}`);
       const daysLeft = Math.max(1, Math.ceil((event.end - nowSec) / 86400));
       const left = Math.max(0, hitGoals.event - eventHits);
@@ -6671,10 +6690,9 @@
       const elapsed = Math.min(1, Math.max(0, (nowSec - event.start) / (event.end - event.start)));
       const onPace = eventHits >= Math.floor(hitGoals.event * elapsed);
       if (left > 0 && !onPace) { parts.push(`need ${formatCount(perDay)}/day`); tone = 'warn'; }
-      notes.push(`Halloweek (25 Oct to 1 Nov TCT): ${formatCount(eventHits)} wins${eventBase.src === 'first' ? ' (counted from the first reading this event)' : ''}; goal ${formatCount(hitGoals.event)}, ${formatCount(left)} to go over ${daysLeft} day${daysLeft === 1 ? '' : 's'} (${formatCount(perDay)} a day). ${onPace ? 'On pace.' : 'Behind pace.'}`);
+      notes.push(`Halloweek (25 Oct to 1 Nov TCT): ${formatCount(eventHits)} wins; goal ${formatCount(hitGoals.event)}, ${formatCount(left)} to go over ${daysLeft} day${daysLeft === 1 ? '' : 's'} (${formatCount(perDay)} a day). ${onPace ? 'On pace.' : 'Behind pace.'}`);
     }
-    if (!parts.length) return null;
-    return { text: `🎯 ${parts.join(' · ')}`, title: `${notes.join(' ')} Wins come from Torn's "attacks won" stat, so fights without the script count too. Change the goals in Tools.`, tone };
+    return { text: `🎯 ${parts.join(' · ')}`, title: `${notes.join(' ')} Counted fight by fight from your attack log (wins only), so fights without the script count too. Change the goals in Tools.`, tone };
   }
 
   function renderGoalLine(el) {

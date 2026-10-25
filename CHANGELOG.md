@@ -4,6 +4,12 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.30.1 - Hit goals count from your attack log
+
+- v0.30.0 showed `Today 0/50 · Event 0/400` after a full day of hits. It subtracted Torn's daily "attacks won" history, and that request returned today's value rather than midnight's, so nothing was ever counted. Wins are now counted fight by fight from your own attack log (`/user/attacks`, outgoing, Limited key): a fight counts when its result is a win (Attacked, Mugged, Hospitalized, Arrested and so on); losses and stalemates do not.
+- The first run reads back to 25 Oct 00:00 TCT (00:00 today outside Halloweek), up to 600 fights per refresh, and finishes larger backlogs over the next refreshes. After that it only fetches fights newer than the last one read, every 2 minutes while hunting and 15 seconds after each win. Each fight is counted once.
+- Without a Limited key the line says so and points to Tools.
+
 ## 0.30.0 - Hit goals
 
 - A goal line on the hunt dock and the home card: `🎯 Today 24/50 · Event 180/400`. It turns green when you meet a goal, and adds `need N/day` when you are behind the pace for the Halloween goal. Tap or hover for the details: wins since 00:00 TCT, Halloweek wins (25 Oct to 1 Nov TCT), how many are left and over how many days.
