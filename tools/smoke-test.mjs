@@ -160,6 +160,12 @@ const huntFetch = (url, options) => {
     const limited = String(options?.headers?.Authorization || '').includes('LIMITEDKEYLIMITE');
     return Promise.resolve({ status: 200, text: () => Promise.resolve(JSON.stringify(limited ? { bars: { energy: { current: 100, maximum: 150, full_time: 0 } } } : { error: { code: 16, error: 'Access level of this key is not high enough' } })) });
   }
+  if (/\/user\/personalstats\?.*stat=attackswon/.test(String(url))) {
+    return Promise.resolve({ status: 200, text: () => Promise.resolve(JSON.stringify({ personalstats: [{ name: 'attackswon', value: 1000, timestamp: nowSec }] })) });
+  }
+  if (/\/user\/personalstats\?.*cat=popular/.test(String(url))) {
+    return Promise.resolve({ status: 200, text: () => Promise.resolve(JSON.stringify({ personalstats: { attacking: { attacks: { won: 1024 } } } })) });
+  }
   if (String(url).includes('/user/competition')) {
     return Promise.resolve({ status: 200, text: () => Promise.resolve(JSON.stringify({ competition: { name: 'Halloween', treats_collected: 1234, basket: { id: 1009, name: 'Horrifying Basket' } } })) });
   }
@@ -200,6 +206,7 @@ if (!dock?.__link || dock.__link.hidden || !String(dock.__link.href || '').start
 }
 if (!/^\d+$/.test(dock?.__pumpCount?.textContent || '')) { failed = true; console.error('Hunt mode: ready count missing on the hunt button'); }
 if (dock?.__basket?.row?.hidden || dock?.__basket?.text?.textContent !== '🎃 Horrifying 294/1,000 → Petrifying') { failed = true; console.error('Hunt mode: basket progress line missing', dock?.__basket?.text?.textContent); }
+if (!/^🎯 Today 24\/50( · Event 24\/400.*)?$/.test(dock?.__goals?.textContent || '') || dock?.__goals?.hidden) { failed = true; console.error('Hunt mode: hit goal line missing', dock?.__goals?.textContent); }
 if (!/706 more to Petrifying/.test(dock?.__basket?.text?.title || '')) { failed = true; console.error('Hunt mode: basket progress tooltip missing', dock?.__basket?.text?.title); }
 if (huntSaved.session?.t0 !== 1234) { failed = true; console.error('Hunt mode: treat baseline not saved in the session', huntSaved.session); }
 if (dock?.__energy?.textContent !== '⚡4') { failed = true; console.error('Hunt mode: energy should be read with the Limited key (100 energy = 4 hits)', dock?.__energy?.textContent, dock?.__energy?.title); }
@@ -221,6 +228,7 @@ if (home.errors.length > 0) { failed = true; console.error('HOME ERRORS:', home.
 if (!home.home || home.home.__link.hidden || home.home.__link.href !== '/page.php?sid=attack&user2ID=2001' || !/^ATTACK ▸ Ghost · L3$/.test(home.home.__linkMain.textContent)) {
   failed = true; console.error('Home: card with the next hunt target missing', home.home?.__linkMain?.textContent, home.home?.__link?.href);
 }
+if (!/^🎯 Today 24\/50/.test(home.home?.__goals?.textContent || '')) { failed = true; console.error('Home: hit goal line missing', home.home?.__goals?.textContent); }
 if (home.home?.__basket?.text?.textContent !== '🎃 Horrifying 294/1,000 → Petrifying') { failed = true; console.error('Home: basket progress missing', home.home?.__basket?.text?.textContent); }
 const homeOff = await boot({ pathname: '/index.php', search: '', seed: { 'two.apiKey.v1': 'ABCDEFGHIJKLMNOP', 'two.hunt.v1': JSON.stringify({ enabled: false, pool: {} }) }, fetchImpl: huntFetch, waitMs: 300 });
 if (homeOff.home || homeOff.errors.length > 0) { failed = true; console.error('Home: no card (and no errors) while hunt mode is off', homeOff.errors); }

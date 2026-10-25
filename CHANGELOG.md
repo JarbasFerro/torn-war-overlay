@@ -4,6 +4,12 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.30.0 - Hit goals
+
+- A goal line on the hunt dock and the home card: `🎯 Today 24/50 · Event 180/400`. It turns green when you meet a goal, and adds `need N/day` when you are behind the pace for the Halloween goal. Tap or hover for the details: wins since 00:00 TCT, Halloweek wins (25 Oct to 1 Nov TCT), how many are left and over how many days.
+- A hit is an attack you win, read from Torn's own "attacks won" stat, so fights made without the script count too. Today's count is now minus the value at 00:00 TCT, and the event count is now minus the value at 25 Oct 00:00 TCT. Both past values come from Torn's daily stat history (`/user/personalstats?stat=attackswon&timestamp=`); if that is unavailable, the first reading of the day or event is used and the tooltip says so. About one request every 2 minutes while hunting, and once 15 seconds after each win.
+- Goals default to 50 a day and 400 for Halloween; change them under Tools → `Set hit goals`.
+
 ## 0.29.1 - Basket shortcut finds the visible basket
 
 - `Basket ▸` landed on the items page without finding the basket. Torn keeps a list per category and hides the inactive ones, so the basket was found in the hidden Special Items list and the scroll had nothing to show. Only the list you can see now counts.

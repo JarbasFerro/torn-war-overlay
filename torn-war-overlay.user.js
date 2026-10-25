@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.29.1
+// @version      0.30.0
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling, plus a hunt mode that scans for easy wins.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -38,7 +38,7 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const SCRIPT_VERSION = '0.29.1';
+  const SCRIPT_VERSION = '0.30.0';
   const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0260__';
   if (window[INSTANCE_KEY]) {
     console.warn(`[${SCRIPT}] v0.26.0 is already running; duplicate injection ignored.`);
@@ -4849,6 +4849,7 @@
       { group: 'Keys', label: 'Set attack-history key (Limited)', run: () => { setAttackApiKey(); } },
       { group: 'Keys', label: 'Clear attack-history key', run: confirmThen('remove the attack-history key?', clearAttackApiKey) },
       { group: 'Hunt', label: 'Hunt mode on/off', run: () => setHuntEnabled(!huntState.enabled) },
+      { group: 'Hunt', label: 'Set hit goals (day / Halloween)', run: () => { setHitGoals(); } },
       { group: 'Hunt', label: 'Restart hunt scan from my ID', run: confirmThen('restart the hunt scan from your own ID? The saved list is kept.', () => { resetHuntCursor(); twoStorage.flush().finally(() => window.location.reload()); }) },
       { group: 'Hunt', label: 'Clear hunt list', run: confirmThen('delete every saved hunt target?', () => clearStoredAndReload(HUNT_STORAGE)) },
       { group: 'Settings and help', label: 'Target rules (SET)', run: () => { openSettingsDialog(); } },
@@ -5059,6 +5060,9 @@
       .two-basket-bar[hidden], .two-hd-basket[hidden] { display:none !important; }
       .two-basket-fill { height:100%; width:0; background:var(--two-warn); transition:width .3s ease-out; }
       .two-home-next { margin-top:7px; min-height:44px; text-decoration:none; }
+      .two-goals-line { margin-top:4px; font-size:var(--two-fs-sm); font-variant-numeric:tabular-nums; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--two-fg); }
+      .two-goals-line.two-goals-good { color:var(--two-good); }
+      .two-goals-line.two-goals-warn { color:var(--two-warn); }
       .two-basket-notice-text { font-size:var(--two-fs-md); color:var(--two-fg); }
       .two-basket-hit { outline:3px solid var(--two-good) !important; outline-offset:-3px; background:var(--two-good-bg) !important; }
       .two-hd-guard { margin-top:5px; padding:3px 6px; border-left:var(--two-edge) solid var(--two-strip-border); border-radius:var(--two-r-sm); font-size:var(--two-fs-sm); background:var(--two-strip); color:var(--two-fg); }
@@ -6377,6 +6381,9 @@
     });
     top.append(name, verdict, status, energy, info, minimize);
     const basket = makeBasketRow('two-hd');
+    const goals = document.createElement('div');
+    goals.className = 'two-goals-line';
+    goals.hidden = true;
 
     const guard = document.createElement('div');
     guard.hidden = true;
@@ -6420,7 +6427,7 @@
     detail.className = 'two-hd-detail';
     detail.hidden = true;
 
-    full.append(top, basket.row, guard, hint, result, actions, detail);
+    full.append(top, basket.row, goals, guard, hint, result, actions, detail);
 
     const pill = makeDockButton('two-hd-pill', '', 'Show the hunt panel', () => {
       if (attackFightActive && !attackFightResult) huntOpenedDuringFight = true;
@@ -6431,7 +6438,7 @@
 
     dock.append(full, pill);
     Object.assign(dock, {
-      __twoHuntDock: true, __full: full, __name: name, __verdict: verdict, __status: status, __energy: energy, __basket: basket, __guard: guard,
+      __twoHuntDock: true, __full: full, __name: name, __verdict: verdict, __status: status, __energy: energy, __basket: basket, __goals: goals, __guard: guard,
       __hint: hint, __result: result, __resultChip: resultChip, __treatGain: treatGain, __session: session, __pumpCount: pumpCount, __link: link,
       __linkMain: linkMain, __linkSub: linkSub, __waiting: waiting, __waitMain: waitMain, __waitSub: waitSub,
       __detail: detail, __pill: pill,
@@ -6485,6 +6492,7 @@
 
     const treats = huntTreats;
     renderBasketRow(dock.__basket.row, dock.__basket.bar, dock.__basket.fill, dock.__basket.text);
+    renderGoalLine(dock.__goals);
 
     dock.__guard.hidden = !guard;
     if (guard) {
@@ -6561,6 +6569,130 @@
     if (index < 0) return null;
     const next = HUNT_BASKETS[index + 1] || null;
     return { tier: HUNT_BASKETS[index][0], chance: 35 + 5 * index, next: next ? { tier: next[0], at: next[1] } : null };
+  }
+
+  // Hit goals (v0.30): wins today and during Halloweek, from Torn's own "attacks won" stat, so fights made without the
+  // script count too. Now minus the value at 00:00 TCT today, and now minus the value at the event start (25 Oct 00:00
+  // TCT, 8 days to 1 Nov 23:59 TCT). Past values come from /user/personalstats?stat=attackswon&timestamp=… (Torn keeps
+  // daily snapshots); if that fails, the first reading of the day or event is the baseline instead.
+  const GOALS_STORAGE = 'two.goals.v1';
+  const HIT_GOAL_DEFAULTS = Object.freeze({ day: 50, event: 400 });
+  const HIT_REFRESH_MS = 2 * 60_000;
+  let hitGoals = loadHitGoals();
+  let hitWonNow = null;
+  let hitWonAt = 0;
+  let hitInFlight = null;
+
+  function loadHitGoals() {
+    const raw = loadObjectJson(GOALS_STORAGE, {});
+    const goal = (value, fallback) => (Number.isFinite(Number(value)) && Number(value) > 0 ? Math.floor(Number(value)) : fallback);
+    return {
+      day: goal(raw.day, HIT_GOAL_DEFAULTS.day),
+      event: goal(raw.event, HIT_GOAL_DEFAULTS.event),
+      base: raw.base && typeof raw.base === 'object' ? raw.base : {}, // { 'YYYY-MM-DD': { v, src } }
+      eventBase: raw.eventBase && typeof raw.eventBase === 'object' ? raw.eventBase : null, // { year, v, src }
+    };
+  }
+
+  function halloweekWindow(nowSec = serverNowSec()) {
+    const year = new Date(nowSec * 1000).getUTCFullYear();
+    const start = Date.UTC(year, 9, 25) / 1000;
+    const end = Date.UTC(year, 10, 2) / 1000; // Exclusive: 1 Nov 23:59:59 TCT is the last second.
+    return { year, start, end, active: nowSec >= start && nowSec < end };
+  }
+
+  async function historicalWon(timestamp) {
+    try {
+      const data = await apiGet('/user/personalstats', { query: { stat: 'attackswon', timestamp } });
+      const stats = data?.personalstats;
+      const list = Array.isArray(stats) ? stats : stats && typeof stats === 'object' ? Object.entries(stats).map(([name, value]) => ({ name, value })) : [];
+      const hit = list.find(item => String(item?.name || '').toLowerCase() === 'attackswon');
+      const value = Number(hit?.value);
+      return Number.isFinite(value) && value >= 0 ? value : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function refreshHitCounts({ force = false } = {}) {
+    if (!apiKey || apiPermanentlyDisabled) return;
+    if (hitInFlight) return hitInFlight;
+    if (!force && Date.now() - hitWonAt < HIT_REFRESH_MS - 1_000) return;
+    if (Date.now() < globalBackoffUntil) return;
+    hitWonAt = Date.now();
+    const flight = (async () => {
+      try {
+        const data = await apiGet('/user/personalstats', { query: { cat: 'popular' }, cacheBust: true });
+        const won = Number(data?.personalstats?.attacking?.attacks?.won);
+        if (!Number.isFinite(won) || won < 0) return;
+        hitWonNow = won;
+        const nowSec = serverNowSec();
+        const day = huntTodayKey();
+        if (!hitGoals.base[day]) {
+          const past = await historicalWon(Date.parse(`${day}T00:00:00Z`) / 1000);
+          hitGoals.base = { [day]: past !== null && past <= won ? { v: past, src: 'api' } : { v: won, src: 'first' } };
+        }
+        const event = halloweekWindow(nowSec);
+        if (event.active && Number(hitGoals.eventBase?.year) !== event.year) {
+          const past = await historicalWon(event.start);
+          hitGoals.eventBase = past !== null && past <= won ? { year: event.year, v: past, src: 'api' } : { year: event.year, v: won, src: 'first' };
+        }
+        saveJson(GOALS_STORAGE, hitGoals);
+      } catch (err) {
+        if (err?.message !== 'API backoff active.') console.warn(`[${SCRIPT}] Could not read your attacks won`, err);
+      } finally {
+        renderAttackPanel();
+      }
+    })().finally(() => { if (hitInFlight === flight) hitInFlight = null; });
+    hitInFlight = flight;
+    return flight;
+  }
+
+  function hitGoalView(nowSec = serverNowSec()) {
+    if (hitWonNow === null) return null;
+    const dayBase = hitGoals.base[huntTodayKey()];
+    const today = dayBase ? Math.max(0, hitWonNow - dayBase.v) : null;
+    const event = halloweekWindow(nowSec);
+    const eventBase = event.active && Number(hitGoals.eventBase?.year) === event.year ? hitGoals.eventBase : null;
+    const eventHits = eventBase ? Math.max(0, hitWonNow - eventBase.v) : null;
+    const parts = [];
+    const notes = [];
+    let tone = 'good';
+    if (today !== null) {
+      parts.push(`Today ${formatCount(today)}/${formatCount(hitGoals.day)}${today >= hitGoals.day ? ' ✓' : ''}`);
+      if (today < hitGoals.day) tone = 'warn';
+      notes.push(`Today: ${formatCount(today)} wins since 00:00 TCT${dayBase.src === 'first' ? ` (counted from the first reading today; Torn's midnight value was unavailable)` : ''}; daily goal ${formatCount(hitGoals.day)}.`);
+    }
+    if (eventHits !== null) {
+      parts.push(`Event ${formatCount(eventHits)}/${formatCount(hitGoals.event)}${eventHits >= hitGoals.event ? ' ✓' : ''}`);
+      const daysLeft = Math.max(1, Math.ceil((event.end - nowSec) / 86400));
+      const left = Math.max(0, hitGoals.event - eventHits);
+      const perDay = Math.ceil(left / daysLeft);
+      const elapsed = Math.min(1, Math.max(0, (nowSec - event.start) / (event.end - event.start)));
+      const onPace = eventHits >= Math.floor(hitGoals.event * elapsed);
+      if (left > 0 && !onPace) { parts.push(`need ${formatCount(perDay)}/day`); tone = 'warn'; }
+      notes.push(`Halloweek (25 Oct to 1 Nov TCT): ${formatCount(eventHits)} wins${eventBase.src === 'first' ? ' (counted from the first reading this event)' : ''}; goal ${formatCount(hitGoals.event)}, ${formatCount(left)} to go over ${daysLeft} day${daysLeft === 1 ? '' : 's'} (${formatCount(perDay)} a day). ${onPace ? 'On pace.' : 'Behind pace.'}`);
+    }
+    if (!parts.length) return null;
+    return { text: `🎯 ${parts.join(' · ')}`, title: `${notes.join(' ')} Wins come from Torn's "attacks won" stat, so fights without the script count too. Change the goals in Tools.`, tone };
+  }
+
+  function renderGoalLine(el) {
+    const view = hitGoalView();
+    el.hidden = !view;
+    if (!view) return;
+    setText(el, view.text);
+    setClass(el, `two-goals-line two-goals-${view.tone}`);
+    el.title = view.title;
+  }
+
+  function setHitGoals() {
+    const day = Number(window.prompt('Daily hit goal (wins per TCT day):', String(hitGoals.day)));
+    const event = Number(window.prompt('Halloween hit goal (wins from 25 Oct to 1 Nov TCT):', String(hitGoals.event)));
+    if (Number.isFinite(day) && day > 0) hitGoals.day = Math.floor(day);
+    if (Number.isFinite(event) && event > 0) hitGoals.event = Math.floor(event);
+    saveJson(GOALS_STORAGE, hitGoals);
+    renderAttackPanel();
   }
 
   // Progress inside the current step, as the basket page shows it ("100 / 250 Treats Collected"). The API's
@@ -6684,6 +6816,7 @@
       setTimeout(() => refreshTreats({ force: true }), 4_000);
       setTimeout(() => refreshTreats({ force: true }), 15_000);
     }
+    if (huntState.enabled && result.kind === 'win') setTimeout(() => refreshHitCounts({ force: true }), 15_000);
     renderAttackPanel();
     // The API record lags the page by a few seconds; ingest twice so the observed verdict lands before the next fight.
     setTimeout(() => ingestRecentAttacksOnAttackPage(), 4_000);
@@ -6918,6 +7051,7 @@
         if (huntState.enabled) {
           await refreshOwnWar().catch(() => { /* handled inside */ });
           refreshTreats().catch(() => { /* handled inside */ });
+          refreshHitCounts().catch(() => { /* handled inside */ });
         }
       } catch (err) {
         if (err?.message !== 'API backoff active.') {
@@ -7272,6 +7406,9 @@
     });
     top.append(title, energy, close);
     const basket = makeBasketRow('two-hd');
+    const goals = document.createElement('div');
+    goals.className = 'two-goals-line';
+    goals.hidden = true;
     const link = document.createElement('a');
     link.className = 'two-hd-next two-hd-next-hot two-home-next';
     const linkMain = document.createElement('span');
@@ -7281,8 +7418,8 @@
     link.append(linkMain, linkSub);
     const waiting = document.createElement('div');
     waiting.className = 'two-hd-next two-hd-next-wait two-home-next';
-    card.append(top, basket.row, link, waiting);
-    Object.assign(card, { __twoHomeCard: true, __title: title, __energy: energy, __basket: basket, __link: link, __linkMain: linkMain, __linkSub: linkSub, __waiting: waiting });
+    card.append(top, basket.row, goals, link, waiting);
+    Object.assign(card, { __twoHomeCard: true, __title: title, __energy: energy, __basket: basket, __goals: goals, __link: link, __linkMain: linkMain, __linkSub: linkSub, __waiting: waiting });
     (document.body || document.documentElement).appendChild(card);
     homeCard = card;
     return card;
@@ -7301,6 +7438,7 @@
     setText(card.__energy, hits === null ? '⚡ –' : `⚡${hits}`);
     card.__energy.classList.toggle('two-hd-energy-out', hits === 0);
     renderBasketRow(card.__basket.row, card.__basket.bar, card.__basket.fill, card.__basket.text);
+    renderGoalLine(card.__goals);
     const showLink = Boolean(huntNext) && !huntPicking;
     card.__link.hidden = !showLink;
     card.__waiting.hidden = showLink;
@@ -7325,6 +7463,7 @@
     ensurePrimaryKeyInfo().catch(() => { /* optional */ });
     refreshOwnBars().then(() => renderHomeCard()).catch(() => { /* handled inside */ });
     refreshTreats().catch(() => { /* handled inside */ });
+    refreshHitCounts().catch(() => { /* handled inside */ });
     homePickNext();
     document.addEventListener('visibilitychange', () => { if (!document.hidden) homePickNext(); });
     window.addEventListener('pagehide', () => flushPersistentState());
