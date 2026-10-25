@@ -1,5 +1,7 @@
 # Top 5 refactors for torn-war-overlay
 
+**Status (25 Oct 2026): all five shipped.** 1 request budget: v0.31.0 · 2 error policy and refresh helper: v0.32.0 · 3 attack-log pipeline: v0.33.0 · 4 unit tests and fake clock: v0.34.0 · 5 Torn markup registry and health check: v0.35.0. Quick extras (version strings, ToS table) shipped in v0.31.0. Still open: the render scheduler, old storage migrations, and moving the remaining five refreshers onto the shared helper.
+
 25 Oct 2026, at v0.30.2. Sources: three code audits in `research_notes/Refactor audit/` (architecture, API layer, tests and fragility), the Torn API v2 OpenAPI spec (v6.13.8), Torn's API page, and the bug history in `CHANGELOG.md`. Claims marked ✔ were re-checked against the code.
 
 ## The shape of the problem

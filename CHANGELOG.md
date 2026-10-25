@@ -4,6 +4,15 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.35.0 - Torn markup in one place, with a health check
+
+- Every assumption about Torn's own pages now lives in one `TORN_DOM` block at the top of the script: the faction member lists, enemy rows, profile and faction links, the name, status and level cells, and the attack log. A Torn redesign becomes one edit instead of a hunt through the file.
+- A health check reports when one of them stops matching, instead of the overlay quietly losing parts:
+  - faction page: players shown but no member list, lists without parseable rows, most rows without a status cell (hospital timers cannot be placed) or a name cell;
+  - attack page: many attack-log lines read but none recognised as a fight result (Torn changed its wording), or no attack log at all after 3 minutes.
+  Issues appear under `tornDom` in the diagnostics snapshot (Tools → diagnostics) and in the console; a critical one also shows one Torn PDA toast a day. A faction tab without member lists, or an attack page where no fight has started yet, is not reported.
+- Unit tests cover the health rules (including the quiet cases) and fight lines as Torn writes them, e.g. "Jarbas left Giresse56 on the street (+1.67)".
+
 ## 0.34.0 - Fast, table-driven tests
 
 - New `tools/unit-tests.mjs` (`node --test`, 10 tests, about 50 ms): the basket ladder against your basket page ("100 / 250") and the Torn City Times table, the Halloweek window edges, the hit-goal tally (each fight once, wins only) and pace across a TCT midnight, chain bonus hits, the finish hint, API error kinds, attack results, ranked-war state and hunt skips. Three of the last five regressions (basket thresholds, goal baselines, day maths) are exactly this kind of maths and would now fail before release.

@@ -119,3 +119,36 @@ test('hunt skips federal jail and fallen players', () => {
     assert.equal(verdict.action, 'skip', state);
   }
 });
+
+test('Torn markup health: flags real breakage, stays quiet on normal pages', () => {
+  const ids = issues => Array.from(issues, issue => issue.id).sort().join(',');
+  const scan = fns.tornDomIssuesFromScan;
+  assert.equal(ids(scan({ lists: 2, rows: 100, rowsWithMember: 100, rowsWithStatus: 100 })), '', 'a healthy war page');
+  assert.equal(ids(scan({ lists: 0, rows: 0, profileLinks: 3 })), '', 'a faction tab without member lists');
+  assert.equal(ids(scan({ lists: 0, rows: 0, profileLinks: 80 })), 'members-list', 'players shown but no member list');
+  assert.equal(ids(scan({ lists: 2, rows: 0, profileLinks: 80 })), 'member-rows');
+  assert.equal(ids(scan({ lists: 2, rows: 100, rowsWithMember: 100, rowsWithStatus: 10 })), 'status-cell');
+  assert.equal(ids(scan({ lists: 2, rows: 100, rowsWithMember: 20, rowsWithStatus: 100 })), 'member-cell');
+  assert.equal(scan({ lists: 0, rows: 0, profileLinks: 80 })[0].critical, true);
+
+  const log = fns.tornDomIssuesFromAttackLog;
+  assert.equal(ids(log({ lines: 12, results: 1, foundAt: 1, pageOpenSec: 600 })), '', 'a normal fight');
+  assert.equal(ids(log({ lines: 0, results: 0, foundAt: 0, pageOpenSec: 60 })), '', 'just opened, no fight yet');
+  assert.equal(ids(log({ lines: 45, results: 0, foundAt: 1, pageOpenSec: 900 })), 'fight-wording');
+  assert.equal(ids(log({ lines: 0, results: 0, foundAt: 0, pageOpenSec: 200 })), 'attack-log');
+});
+
+test('fight lines as Torn writes them', () => {
+  const cases = [
+    ['Jarbas left Giresse56 on the street (+1.67)', 'Giresse56', 'win', 'leave'],
+    ['Jarbas hospitalized Pandz (+2.10)', 'Pandz', 'win', 'hospitalize'],
+    ['Jarbas mugged Squrrl and stole $1,234 (+0.98)', 'Squrrl', 'win', 'mug'],
+    ['Jarbas lost to Tank', 'Tank', 'loss', 'defeat'],
+  ];
+  for (const [line, target, kind, method] of cases) {
+    const result = fns.classifyFightLine(line, target);
+    assert.equal(result?.kind, kind, line);
+    assert.equal(result?.method, method, line);
+  }
+  assert.equal(fns.classifyFightLine('Jarbas fired 3 rounds of their Rifle hitting Pandz in the chest', 'Pandz')?.kind ?? null, null, 'a hit line is not a result');
+});

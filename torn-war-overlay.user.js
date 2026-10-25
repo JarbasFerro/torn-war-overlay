@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.34.0
+// @version      0.35.0
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling, plus a hunt mode that scans for easy wins.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -36,7 +36,7 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const SCRIPT_VERSION = '0.34.0';
+  const SCRIPT_VERSION = '0.35.0';
   const INSTANCE_KEY = '__TORN_WAR_OVERLAY__';
   if (window[INSTANCE_KEY]) {
     console.warn(`[${SCRIPT}] v${window[INSTANCE_KEY]} is already running; duplicate injection of v${SCRIPT_VERSION} ignored.`);
@@ -50,6 +50,20 @@
   const API_BASE = 'https://api.torn.com/v2';
   const API_COMMENT = `two-v${SCRIPT_VERSION}`; // Shown next to each call in the key owner's API log.
   const PDA_API_KEY = '###PDA-APIKEY###';
+
+  // Torn markup (v0.35): every assumption about Torn's own pages lives here, so a Torn redesign is one edit. Fight
+  // result wording is FIGHT_FINISHERS / classifyFightLine; the chat-bar probe is measureBottomObstruction. The health
+  // check (checkTornDomHealth) reports in diagnostics when one of these stops matching, instead of failing silently.
+  const TORN_DOM = Object.freeze({
+    membersList: 'ul.members-list', // Faction page: one list per faction (yours, the enemy's).
+    enemyRow: 'li.enemy', // Rows in the enemy list; any li is the fallback.
+    profileLink: 'a[href*="profiles.php"][href*="XID="]', // The member's name link carries their user id.
+    factionLink: 'a[href*="factions.php"][href*="ID="]', // A link in the list header carries the faction id.
+    memberCell: 'div.member, [class*="member"]', // Name cell: hosts the age, activity, dots and intel badges.
+    statusCell: 'div.status, [class*="status"]', // Status cell: hosts the hospital countdown badge.
+    levelCell: 'div.level, [class*="level"]',
+    attackLog: 'ul[aria-describedby="log-header"]', // Attack page: the fight log, read for the fight result.
+  });
 
   const KEY_STORAGE = 'two.apiKey.v1';
   const SIGNUP_CACHE_STORAGE = 'two.signupCache.v2';
@@ -829,6 +843,7 @@
       version: SCRIPT_VERSION,
       storage: { backend: twoStorage.backend, quotaFull: twoStorage.quotaFull },
       apiBudget: { lastMinute: apiSendsLastMinute(), lanes: API_LANE_LIMITS, throttledWaits: runtimeStats.apiThrottled },
+      tornDom: { issues: tornDomHealth.issues, faction: tornDomHealth.faction, attackLog: tornDomHealth.attackLog, dockOffsetPx: huntBottomOffset },
       pdaTab: { supported: isPdaRuntime() && pdaTabStateSupported, state: pdaTabState },
       generatedAt: new Date().toISOString(),
       active: isActiveView(),
@@ -1311,14 +1326,14 @@
 
   function getFactionIdFromList(list) {
     if (!list) return null;
-    const factionAnchor = list.querySelector('a[href*="factions.php"][href*="ID="]');
+    const factionAnchor = list.querySelector(TORN_DOM.factionLink);
     const raw = factionAnchor ? getParamFromAnchor(factionAnchor, 'ID') : null;
     return raw && /^\d+$/.test(raw) ? Number(raw) : null;
   }
 
   function getLevelFromRow(li) {
     if (!li) return Number.POSITIVE_INFINITY;
-    const levelDiv = li.querySelector('div.level, [class*="level"]');
+    const levelDiv = li.querySelector(TORN_DOM.levelCell);
     const candidates = [levelDiv?.textContent, li.getAttribute?.('data-level')].filter(Boolean);
     for (const value of candidates) {
       const match = String(value).match(/\b(\d{1,3})\b/);
@@ -3546,7 +3561,7 @@
     const stored = Number(statusDiv?.dataset?.twoUserId);
     if (Number.isFinite(stored) && stored > 0) return stored;
     const li = statusDiv?.closest?.('li');
-    const anchor = li?.querySelector?.('a[href*="profiles.php"][href*="XID="]');
+    const anchor = li?.querySelector?.(TORN_DOM.profileLink);
     return anchor ? getUserIdFromProfileLink(anchor) : null;
   }
 
@@ -3648,8 +3663,8 @@
         if (mutation.type === 'childList') {
           for (const node of [...mutation.addedNodes, ...mutation.removedNodes]) {
             if (!(node instanceof Element)) continue;
-            if (node.matches?.('li.enemy, li [href*="profiles.php"][href*="XID="]')
-              || node.querySelector?.('a[href*="profiles.php"][href*="XID="]')) {
+            if (node.matches?.(`${TORN_DOM.enemyRow}, li ${TORN_DOM.profileLink}`)
+              || node.querySelector?.(TORN_DOM.profileLink)) {
               structureChanged = true;
               break;
             }
@@ -3695,21 +3710,26 @@
     const previousIds = new Set(rowsByUser.keys());
     const previousFirstRows = new Map(Array.from(rowsByUser.entries()).map(([id, rows]) => [id, rows?.[0]?.li || null]));
     const newMap = new Map();
-    const lists = Array.from(document.querySelectorAll('ul.members-list'));
+    const lists = Array.from(document.querySelectorAll(TORN_DOM.membersList));
+    const domScan = { lists: lists.length, rows: 0, rowsWithMember: 0, rowsWithStatus: 0, profileLinks: 0 };
 
     for (const list of lists) {
       observeMembersList(list);
-      let lis = Array.from(list.querySelectorAll('li.enemy'));
+      let lis = Array.from(list.querySelectorAll(TORN_DOM.enemyRow));
       if (lis.length === 0) lis = Array.from(list.querySelectorAll('li'));
 
       for (const li of lis) {
-        const anchor = li.querySelector('a[href*="profiles.php"][href*="XID="]');
+        const anchor = li.querySelector(TORN_DOM.profileLink);
         if (!anchor) continue;
         const userId = getUserIdFromProfileLink(anchor);
         if (!userId) continue;
 
-        const memberDiv = li.querySelector('div.member, [class*="member"]') || anchor.parentElement;
-        const statusDiv = li.querySelector('div.status, [class*="status"]');
+        const exactMemberDiv = li.querySelector(TORN_DOM.memberCell);
+        const memberDiv = exactMemberDiv || anchor.parentElement;
+        const statusDiv = li.querySelector(TORN_DOM.statusCell);
+        domScan.rows += 1;
+        if (exactMemberDiv) domScan.rowsWithMember += 1;
+        if (statusDiv) domScan.rowsWithStatus += 1;
         const level = getLevelFromRow(li);
         const ageBadge = ensureAgeBadge(memberDiv, userId);
         const activityBadge = ensureActivityBadge(memberDiv, userId);
@@ -3721,6 +3741,9 @@
         newMap.get(userId).push({ li, list, anchor, memberDiv, statusDiv, level, ageBadge, activityBadge, attackHistoryBadge, intelBadge, hospBadge });
       }
     }
+
+    if (domScan.lists === 0 || domScan.rows === 0) domScan.profileLinks = document.querySelectorAll(TORN_DOM.profileLink).length;
+    reportTornDom(tornDomIssuesFromScan(domScan), ['members-list', 'member-rows', 'status-cell', 'member-cell'], domScan);
 
     if (newMap.size === 0) {
       const elapsed = Date.now() - lastNonEmptyRowsAt;
@@ -5307,7 +5330,7 @@
         for (const mutation of mutations) {
           for (const node of [...mutation.addedNodes, ...mutation.removedNodes]) {
             if (!(node instanceof Element)) continue;
-            if (node.matches?.('ul.members-list') || node.querySelector?.('ul.members-list')) {
+            if (node.matches?.(TORN_DOM.membersList) || node.querySelector?.(TORN_DOM.membersList)) {
               shouldScan = true;
               break;
             }
@@ -5744,7 +5767,7 @@
   const attackLogSeenLines = new Set();
   let ownBars = null; // { energyCurrent, energyMax, fullTime, fetchedAt }; mirrors ownBarsResource.value
   let ownBarsError = ''; // Why energy is missing, shown in the hunt dock instead of silently hiding it.
-  const ATTACK_LOG_SELECTOR = 'ul[aria-describedby="log-header"]';
+  const ATTACK_LOG_SELECTOR = TORN_DOM.attackLog;
   const OWN_BARS_REFRESH_MS = 60_000;
 
   // Fight-result lines as Torn renders them in the attack log; only the page currently being viewed is read.
@@ -5754,6 +5777,55 @@
     { re: /^(\S+) mugged (\S+)(?: and stole \$[\d,]+)?(?:\s*\(\+([\d.]+)\))?/i, method: 'mug' },
     { re: /^(\S+) arrested (\S+)(?:\s*\(\+([\d.]+)\))?/i, method: 'arrest' },
   ]);
+
+  // ---------------------------------------------------------------------------
+  // Torn markup health (v0.35). Pure rules decide from counts what looks broken; reportTornDom keeps the current issues
+  // for diagnostics and shows one Torn PDA toast a day for a critical one. Rules stay conservative: a page that simply
+  // has no member list (another faction tab) or no fight yet is not a fault.
+  // ---------------------------------------------------------------------------
+  const tornDomHealth = { issues: {}, faction: null, attackLog: { lines: 0, results: 0, foundAt: 0 } };
+  let attackPageOpenedAt = monotonicNowMs();
+
+  function tornDomIssuesFromScan({ lists = 0, rows = 0, rowsWithMember = 0, rowsWithStatus = 0, profileLinks = 0 } = {}) {
+    const issues = [];
+    if (lists === 0 && profileLinks >= 10) {
+      issues.push({ id: 'members-list', critical: true, what: `no member list (${TORN_DOM.membersList}) although the page shows ${profileLinks} player links` });
+    } else if (lists > 0 && rows === 0 && profileLinks >= 5) {
+      issues.push({ id: 'member-rows', critical: true, what: `member lists found but no row with a profile link (${TORN_DOM.profileLink})` });
+    }
+    if (rows >= 5 && rowsWithStatus / rows < 0.5) {
+      issues.push({ id: 'status-cell', critical: true, what: `${rows - rowsWithStatus} of ${rows} rows have no status cell (${TORN_DOM.statusCell}): hospital timers cannot be shown` });
+    }
+    if (rows >= 5 && rowsWithMember / rows < 0.5) {
+      issues.push({ id: 'member-cell', critical: false, what: `${rows - rowsWithMember} of ${rows} rows have no name cell (${TORN_DOM.memberCell}); badges use the link's parent instead` });
+    }
+    return issues;
+  }
+
+  function tornDomIssuesFromAttackLog({ lines = 0, results = 0, foundAt = 0, pageOpenSec = 0 } = {}) {
+    const issues = [];
+    if (lines >= 40 && results === 0) issues.push({ id: 'fight-wording', critical: true, what: `${lines} attack-log lines read but none matched a fight result: Torn's wording may have changed` });
+    if (!foundAt && pageOpenSec >= 180) issues.push({ id: 'attack-log', critical: false, what: `no attack log (${TORN_DOM.attackLog}) after ${Math.round(pageOpenSec / 60)} minutes on the attack page` });
+    return issues;
+  }
+
+  // Replaces the issues this check owns (ids) with the current ones; others are kept.
+  function reportTornDom(issues, ids, detail = null) {
+    for (const id of ids) {
+      const now = issues.find(issue => issue.id === id);
+      if (!now) { delete tornDomHealth.issues[id]; continue; }
+      const before = tornDomHealth.issues[id];
+      tornDomHealth.issues[id] = { ...now, since: before?.since || new Date().toISOString() };
+      if (!before) console.warn(`[${SCRIPT}] Torn page check: ${now.what}`);
+      if (now.critical) toastOnce(`dom-${id}`, `Torn War Overlay: Torn's page looks different (${now.what}). Some overlay parts may be missing.`, 'warn', 24 * 60 * 60_000);
+    }
+    if (detail && ids.includes('members-list')) tornDomHealth.faction = detail;
+  }
+
+  function checkAttackLogHealth() {
+    const pageOpenSec = Math.floor((monotonicNowMs() - attackPageOpenedAt) / 1000);
+    reportTornDom(tornDomIssuesFromAttackLog({ ...tornDomHealth.attackLog, pageOpenSec }), ['fight-wording', 'attack-log']);
+  }
 
   function classifyFightLine(text, targetName) {
     const line = String(text || '').replace(/\s+/g, ' ').trim();
@@ -5796,14 +5868,18 @@
       // Lines already on the page when the observer attached belong to an earlier fight; later ones wait for the next scan.
       if (monotonicNowMs() - attackLogAttachedAt < 1_500) continue;
       attackLogSeenLines.add(text);
+      tornDomHealth.attackLog.lines += 1;
       const result = classifyFightLine(text, attackTargetProfile?.name);
       if (!result || result.kind === 'unknown') {
         if (!attackFightActive) { attackFightActive = true; renderAttackPanel(); } // The fight has started.
         continue;
       }
+      tornDomHealth.attackLog.results += 1;
+      checkAttackLogHealth();
       onAttackFightFinished(result);
       return;
     }
+    checkAttackLogHealth();
   }
 
   function attachAttackLogObserver() {
@@ -5812,6 +5888,7 @@
       if (!list || attackLogObserver) return;
       attackLogList = list;
       attackLogAttachedAt = monotonicNowMs();
+      tornDomHealth.attackLog.foundAt = attackLogAttachedAt;
       for (const item of list.querySelectorAll('li')) {
         const text = String(item.innerText || item.textContent || '').replace(/\s+/g, ' ').trim();
         if (text) attackLogSeenLines.add(text);
@@ -7458,6 +7535,8 @@
   async function initAttackPage() {
     attackTargetId = Number(new URLSearchParams(location.search).get('user2ID'));
     if (!Number.isFinite(attackTargetId) || attackTargetId <= 0) return;
+    attackPageOpenedAt = monotonicNowMs();
+    setTimeout(() => { if (!tornDomHealth.attackLog.foundAt && attackPageVisible()) checkAttackLogHealth(); }, 181_000);
     renderAttackPanel();
 
     // Server clock anchor for the hospital countdown; the basic profile carries no timestamp.
@@ -7648,7 +7727,7 @@
       huntBasketProgress, huntBasketLine, halloweekWindow,
       tallyOutgoingAttacks, hitGoalSummary,
       isChainBonusHit, finishHintFor, classifyAttackResult, classifyFightLine, normalizeAttack, normalizeRankedWar,
-      classifyHuntProfile,
+      classifyHuntProfile, tornDomIssuesFromScan, tornDomIssuesFromAttackLog, TORN_DOM,
     });
   }
 
