@@ -4,6 +4,14 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.26.0 - Torn PDA tab awareness, tools sheet and native toasts
+
+- In Torn PDA the script asks the app whether its tab is the one on screen and whether the browser is showing (`PDA_getTabState`), every 2 seconds. When it is not, the page pauses exactly as if it were hidden: no hunt scanning, no status or energy polls, no faction refreshes. iOS cannot pause background Torn PDA tabs, so before this an attack page left open in another tab kept spending the shared 100-requests-a-minute budget. On startup the script waits up to 1 second for the first answer, so a tab opened in the background never starts with a burst of requests. If the app does not answer, the script falls back to page visibility as before.
+- New tools sheet with every action that used to live only in the userscript menu, which Torn PDA does not have: set or clear keys, hunt on/off, restart the hunt scan, clear the hunt list, target rules, diagnostics, reset settings and clearing cached data. Destructive actions ask first. Open it with `⋯` on the faction toolbar, `Tools…` in the hunt details, or `Tools…` in the war panel's `i` view. The userscript menu is built from the same list.
+- In Torn PDA, diagnostics are copied straight to the clipboard with a confirmation toast; elsewhere they open in a prompt as before.
+- Native Torn PDA toasts for the few events that need attention, each rate-limited: data moved to Torn PDA storage (once), storage full (once per page), a key that cannot read energy (at most daily), a rejected API key (at most hourly) and no free hunt target (at most every 30 minutes).
+- These app handlers are not part of Torn PDA's userscript documentation, so every call is feature-checked and time-limited; an app without them behaves as before.
+
 ## 0.25.0 - Torn PDA native storage
 
 - In Torn PDA the script now keeps everything it saves (API keys, settings, hunt pool, opponent intel, caches) in `PDA_storage`, Torn PDA's per-script store backed by the app. It has 10 MB per script by default (the user can raise it in the app) instead of a localStorage of about 5 MB shared with Torn and every other script, and it survives clearing the browser cache. Tampermonkey and other managers keep using localStorage.

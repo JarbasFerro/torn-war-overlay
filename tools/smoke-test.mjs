@@ -8,7 +8,9 @@
 //      as the next target, then the scanner keeps a weak player and skips a strong one and a missing ID;
 //   5. Torn PDA native storage: existing localStorage data moves into PDA_storage (verified, then removed locally), the
 //      script runs from it and later writes land there; a failing or mismatching store keeps localStorage untouched;
-//   6. an unrelated page: the script does not run.
+//   6. Torn PDA app bridge: a background tab (PDA_getTabState says inactive) makes no hunt requests until the tab
+//      becomes active, the storage move shows a native toast, and the userscript menu mirrors the tools list;
+//   7. an unrelated page: the script does not run.
 // Run: node tools/smoke-test.mjs
 
 import { readFileSync } from 'node:fs';
@@ -52,6 +54,7 @@ async function boot({ pathname, search, seed = {}, fetchImpl = null, waitMs = 15
   const warnings = [];
   const storage = new Map(Object.entries(seed));
   let promptCalls = 0;
+  const menu = [];
 
   const head = makeElement('head');
   const body = makeElement('body');
@@ -95,6 +98,7 @@ async function boot({ pathname, search, seed = {}, fetchImpl = null, waitMs = 15
     history: { pushState() {}, replaceState() {} },
     URL, URLSearchParams,
   };
+  sandbox.GM_registerMenuCommand = label => menu.push(label);
   Object.assign(sandbox, globals);
   sandbox.window = sandbox;
   sandbox.globalThis = sandbox;
@@ -106,7 +110,7 @@ async function boot({ pathname, search, seed = {}, fetchImpl = null, waitMs = 15
   vm.createContext(sandbox);
   vm.runInContext(source, sandbox, { filename: 'torn-war-overlay.user.js' });
   await new Promise(resolve => setTimeout(resolve, waitMs));
-  return { errors, warnings, promptCalls, storage, mounted: body.children.length, panel: body.children.find(node => node.__twoName) || null, dock: body.children.find(node => node.__twoHuntDock) || null };
+  return { errors, warnings, promptCalls, storage, menu, mounted: body.children.length, panel: body.children.find(node => node.__twoName) || null, dock: body.children.find(node => node.__twoHuntDock) || null };
 }
 
 let failed = false;
@@ -231,6 +235,50 @@ for (const [label, options] of [['failing store', { failLoad: true }], ['mismatc
   if (fallback.storage.get('two.apiKey.v1') !== 'ABCDEFGHIJKLMNOP') { failed = true; console.error(`PDA storage (${label}): localStorage data must be kept`); }
   if (!fallback.dock) { failed = true; console.error(`PDA storage (${label}): script should still run on localStorage`); }
 }
+
+// Torn PDA runtime: PDA_httpGet carries the API, flutter_inappwebview.callHandler the app handlers.
+const tabState = { uid: 't1', isActiveTab: false, isWebViewVisible: true };
+const bridgeCalls = [];
+const pdaUrls = [];
+const pdaRuntime = {
+  PDA_httpGet: async (url, headers) => {
+    pdaUrls.push(String(url));
+    const response = await huntFetch(url, { headers });
+    return { status: response.status, responseText: await response.text() };
+  },
+  flutter_inappwebview: {
+    callHandler: (name, ...args) => {
+      bridgeCalls.push([name, ...args]);
+      if (name === 'PDA_getTabState') return Promise.resolve({ ...tabState });
+      if (name === 'showToast' || name === 'copyToClipboard') return Promise.resolve({ status: 'success' });
+      return Promise.reject(new Error(`no handler ${name}`));
+    },
+  },
+  PDA_storage: makePdaStorage(),
+};
+setTimeout(() => { tabState.isActiveTab = true; }, 2_500); // The user switches to this tab.
+const pdaTab = await boot({ pathname: '/loader.php', search: '?sid=attack&user2ID=123456', seed: pdaSeed, globals: pdaRuntime, waitMs: 5_500 });
+if (pdaTab.errors.length > 0) { failed = true; console.error('PDA TAB ERRORS:', pdaTab.errors.join('\n')); }
+const firstScanAt = pdaUrls.findIndex(url => url.includes('/user/1005/profile'));
+const tabAnswersBeforeScan = bridgeCalls.slice(0, Math.max(0, bridgeCalls.length)).filter(([name]) => name === 'PDA_getTabState').length;
+if (firstScanAt < 0) { failed = true; console.error('PDA tab: hunting should start once the tab becomes active'); }
+if (!bridgeCalls.some(([name]) => name === 'PDA_getTabState') || tabAnswersBeforeScan < 2) { failed = true; console.error('PDA tab: tab state should be polled'); }
+if (!bridgeCalls.some(([name, arg]) => name === 'showToast' && /moved \d+ saved items/.test(arg?.text || ''))) { failed = true; console.error('PDA tab: storage move should show a native toast', bridgeCalls.filter(([name]) => name === 'showToast')); }
+
+// Same runtime, tab never active: not a single hunt request in 3 s.
+const hiddenUrls = [];
+const hidden = await boot({
+  pathname: '/loader.php', search: '?sid=attack&user2ID=123456', seed: pdaSeed, waitMs: 3_000,
+  globals: { ...pdaRuntime, PDA_storage: makePdaStorage(), PDA_httpGet: async (url, headers) => { hiddenUrls.push(String(url)); const r = await huntFetch(url, { headers }); return { status: r.status, responseText: await r.text() }; },
+    flutter_inappwebview: { callHandler: name => (name === 'PDA_getTabState' ? Promise.resolve({ isActiveTab: false, isWebViewVisible: true }) : Promise.resolve({ status: 'success' })) } },
+});
+if (hidden.errors.length > 0) { failed = true; console.error('PDA HIDDEN TAB ERRORS:', hidden.errors.join('\n')); }
+// The page's one-time context reads (clock, key info, own stats, this target's profile) are allowed; hunting other IDs,
+// the 10 s status poll and the energy poll are not.
+const backgroundWork = hiddenUrls.filter(url => /\/user\/(?!123456\/)\d+\/|\/user\/123456\/basic|\/user\/bars|\/faction\/\d+\/members/.test(url));
+if (backgroundWork.length > 0) { failed = true; console.error('PDA tab: a background tab must not hunt or poll', backgroundWork); }
+
+if (faction.menu.length < 10 || !faction.menu.includes('Torn War Overlay: Clear hunt list') || !faction.menu.includes('Torn War Overlay: open tools')) { failed = true; console.error('Menu should mirror the tools list', faction.menu); }
 
 const other = await boot({ pathname: '/index.php', search: '' });
 if (other.promptCalls !== 0 || other.errors.length > 0) { failed = true; console.error('Unrelated page: script should not run'); }

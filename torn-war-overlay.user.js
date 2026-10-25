@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.25.0
+// @version      0.26.0
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling, plus a hunt mode that scans for easy wins.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -34,9 +34,10 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0250__';
+  const SCRIPT_VERSION = '0.26.0';
+  const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0260__';
   if (window[INSTANCE_KEY]) {
-    console.warn(`[${SCRIPT}] v0.25.0 is already running; duplicate injection ignored.`);
+    console.warn(`[${SCRIPT}] v0.26.0 is already running; duplicate injection ignored.`);
     return;
   }
   window[INSTANCE_KEY] = true;
@@ -45,7 +46,7 @@
   const twoStorage = await openTwoStorage();
 
   const API_BASE = 'https://api.torn.com/v2';
-  const API_COMMENT = 'two-v0.25.0';
+  const API_COMMENT = 'two-v0.26.0';
   const PDA_API_KEY = '###PDA-APIKEY###';
 
   const KEY_STORAGE = 'two.apiKey.v1';
@@ -358,6 +359,7 @@
     const store = typeof PDA_storage !== 'undefined' ? PDA_storage : null;
     if (!store || ['loadAll', 'getMany', 'setMany', 'delete'].some(name => typeof store[name] !== 'function')) return local;
 
+    let movedNotice = '';
     const timeout = (promise, ms) => Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error('PDA_storage timed out')), ms))]);
     const mem = new Map();
     try {
@@ -383,6 +385,8 @@
           if (key !== MIGRATED_MARK) { try { localStorage.removeItem(key); } catch { /* ignore */ } }
         }
         console.info(`${tag} Moved ${Object.keys(moved).length - 1} saved items from localStorage to Torn PDA storage.`);
+        // Runs before the rest of the script exists; init() shows this once the toast helper is defined.
+        movedNotice = `Torn War Overlay: moved ${Object.keys(moved).length - 1} saved items to Torn PDA storage`;
       }
     } catch (err) {
       console.warn(`${tag} Torn PDA storage unavailable; using localStorage.`, err);
@@ -394,6 +398,7 @@
     const native = {
       backend: 'pda',
       quotaFull: false,
+      get movedNotice() { return movedNotice; },
       getItem(key) { return mem.has(key) ? mem.get(key) : null; },
       setItem(key, value) {
         mem.set(key, String(value));
@@ -415,7 +420,8 @@
           await store.setMany(batch);
         } catch (err) {
           if (err?.code === 'QuotaExceeded') {
-            native.quotaFull = true; // Torn PDA already told the user; retrying cannot help until they raise the limit.
+            if (!native.quotaFull) pdaToast('Torn War Overlay: storage is full; raise the script storage limit in Torn PDA', 'error', 6);
+            native.quotaFull = true; // Retrying cannot help until the user raises the limit.
             console.warn(`${tag} Torn PDA storage is full; the latest changes were kept in memory only.`, err);
             return;
           }
@@ -812,8 +818,9 @@
       : null;
     return {
       script: SCRIPT,
-      version: '0.25.0',
+      version: SCRIPT_VERSION,
       storage: { backend: twoStorage.backend, quotaFull: twoStorage.quotaFull },
+      pdaTab: { supported: isPdaRuntime() && pdaTabStateSupported, state: pdaTabState },
       generatedAt: new Date().toISOString(),
       active: isActiveView(),
       factionId: Number.isFinite(Number(activeFactionId)) ? Number(activeFactionId) : null,
@@ -881,28 +888,15 @@
   }
 
   function showDiagnosticSnapshot() {
-    const payload = JSON.stringify(getDiagnosticSnapshot(), null, 2);
-    window.prompt(`${SCRIPT} v0.22.1 diagnostics - copy this text if troubleshooting is needed:`, payload);
-    return payload;
+    return shareDiagnostics();
   }
 
 
   if (typeof GM_registerMenuCommand === 'function') {
     try {
-      GM_registerMenuCommand('Torn War Overlay: set API key', setManualApiKey);
-      GM_registerMenuCommand('Torn War Overlay: open settings', openSettingsDialog);
-      GM_registerMenuCommand('Torn War Overlay: show RC diagnostics', showDiagnosticSnapshot);
-      GM_registerMenuCommand('Torn War Overlay: reset settings', () => clearStoredAndReload(SETTINGS_STORAGE));
-      GM_registerMenuCommand('Torn War Overlay: clear cached ages', () => clearStoredAndReload(SIGNUP_CACHE_STORAGE, LEGACY_PROFILE_CACHE_STORAGE));
-      GM_registerMenuCommand('Torn War Overlay: clear cached statuses', () => clearStoredAndReload(FACTION_STATUS_CACHE_STORAGE));
-      GM_registerMenuCommand('Torn War Overlay: set attack-history key', setAttackApiKey);
-      GM_registerMenuCommand('Torn War Overlay: clear attack-history key', clearAttackApiKey);
-      GM_registerMenuCommand('Torn War Overlay: clear cached attack dots', () => clearStoredAndReload(ATTACK_HISTORY_CACHE_STORAGE));
-      GM_registerMenuCommand('Torn War Overlay: hunt mode on/off', () => setHuntEnabled(!huntState.enabled));
-      GM_registerMenuCommand('Torn War Overlay: restart hunt scan from my ID', () => { resetHuntCursor(); twoStorage.flush().finally(() => window.location.reload()); });
-      GM_registerMenuCommand('Torn War Overlay: clear hunt pool', () => clearStoredAndReload(HUNT_STORAGE));
-      // The attack cursor must go too, otherwise only the newest page would be re-read after the reload.
-      GM_registerMenuCommand('Torn War Overlay: clear personal intel memory', () => clearStoredAndReload(OPPONENT_INTEL_STORAGE, SELF_INTEL_STORAGE, STRENGTH_CACHE_STORAGE, ATTACK_HISTORY_CACHE_STORAGE));
+      // Same list as the in-page tools sheet (toolActions), so the two can never drift apart.
+      GM_registerMenuCommand('Torn War Overlay: open tools', () => openToolsSheet());
+      for (const action of toolActions()) GM_registerMenuCommand(`Torn War Overlay: ${action.label}`, action.run);
     } catch {
       // Torn PDA does not necessarily implement menu commands.
     }
@@ -954,6 +948,7 @@
     consecutiveApiFailures += 1;
     const classification = classifyApiError(err?.code, err?.status, err?.message);
     if (classification.permanentKeyError) {
+      if (!apiPermanentlyDisabled) toastOnce('api-key', `Torn War Overlay stopped: ${err?.message || 'API key rejected'}. Set a new key in Tools.`, 'error', 60 * 60_000);
       apiPermanentlyDisabled = true;
       apiHealth = 'key';
       apiHealthDetail = err?.message || 'API key unavailable';
@@ -2793,7 +2788,9 @@
       saveSettings();
       updateTargetToolbars();
     });
-    modeGroup.append(allButton, targetButton, filterButton, settingsButton);
+    const toolsButton = makeButton('⋯', 'Tools: keys, hunt, diagnostics, clear data', openToolsSheet);
+    toolsButton.setAttribute('aria-label', 'Tools');
+    modeGroup.append(allButton, targetButton, filterButton, settingsButton, toolsButton);
 
     // Filter bar: a second toolbar row of toggle chips. A lit chip is shown; a dim chip is hidden. Unknown facts never hide a row.
     const filterBar = document.createElement('div');
@@ -4713,13 +4710,208 @@
 
   function isActiveView() {
     if (document.hidden) return false;
-    // Torn PDA webviews can report hasFocus() inconsistently; visibility is the reliable foreground signal there.
-    if (isPdaRuntime()) return true;
+    // Torn PDA webviews can report hasFocus() inconsistently; the app's own tab state (when it answers) and page
+    // visibility are the reliable foreground signals there.
+    if (isPdaRuntime()) return pdaTabVisible();
     return typeof document.hasFocus !== 'function' ? true : document.hasFocus();
   }
 
   function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, Math.max(0, ms)));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Torn PDA app bridge (v0.26). Besides the documented PDA_httpGet and PDA_storage, the app registers JavaScript
+  // handlers on every browser tab (lib/utils/webview/webview_handlers.dart). These are not in the userscript docs, so
+  // each call is feature-checked, time-limited and optional: if the app does not answer, the script behaves as before.
+  //   PDA_getTabState  - is this tab the active one, and is the browser on screen? iOS cannot pause background tabs
+  //                      (webview_full.dart), so without it a hidden attack page would keep scanning and polling.
+  //   showToast        - short native messages for the few events that need the user's attention.
+  //   copyToClipboard  - diagnostics go straight to the clipboard.
+  // ---------------------------------------------------------------------------
+  const PDA_CALL_TIMEOUT_MS = 3_000;
+  const PDA_TAB_POLL_MS = 2_000;
+  const TOAST_LOG_STORAGE = 'two.toastLog.v1';
+  let pdaTabState = null; // { active, visible } once the app has answered; null means unknown, treated as visible.
+  let pdaTabStateSupported = true;
+  let pdaTabFailures = 0;
+  let pdaTabTimer = null;
+
+  async function pdaCall(name, ...args) {
+    if (!isPdaRuntime()) throw new Error('Not running in Torn PDA');
+    const deadline = new Promise((_, reject) => setTimeout(() => reject(new Error(`Torn PDA handler ${name} did not answer`)), PDA_CALL_TIMEOUT_MS));
+    if (typeof window.flutter_inappwebview?.callHandler !== 'function' && typeof __PDA_platformReadyPromise !== 'undefined') {
+      await Promise.race([__PDA_platformReadyPromise, deadline]);
+    }
+    const bridge = window.flutter_inappwebview;
+    if (!bridge || typeof bridge.callHandler !== 'function') throw new Error('Torn PDA bridge unavailable');
+    return Promise.race([bridge.callHandler(name, ...args), deadline]);
+  }
+
+  const TOAST_COLORS = Object.freeze({
+    info: { r: 33, g: 99, b: 160 },
+    success: { r: 47, g: 107, b: 23 },
+    warn: { r: 150, g: 95, b: 10 },
+    error: { r: 138, g: 31, b: 23 },
+  });
+
+  function pdaToast(text, tone = 'info', seconds = 4) {
+    if (!isPdaRuntime()) return;
+    pdaCall('showToast', { text, seconds, clickClose: true, bgColor: TOAST_COLORS[tone] || TOAST_COLORS.info })
+      .catch(() => { /* Toasts are a courtesy; an older app simply shows nothing. */ });
+  }
+
+  // At most one toast per `id` per cooldown, remembered across page loads so attack pages do not repeat it.
+  function toastOnce(id, text, tone, cooldownMs) {
+    if (!isPdaRuntime()) return;
+    const log = loadObjectJson(TOAST_LOG_STORAGE, {});
+    if (Date.now() - (Number(log[id]) || 0) < cooldownMs) return;
+    log[id] = Date.now();
+    saveJson(TOAST_LOG_STORAGE, log);
+    pdaToast(text, tone);
+  }
+
+  function pdaTabVisible() {
+    return !pdaTabState || (pdaTabState.active && pdaTabState.visible);
+  }
+
+  function onPdaVisibilityChanged(visible) {
+    if (PAGE_MODE === 'attack') {
+      if (visible) resumeAttackPage();
+      else pauseAttackPage();
+    } else if (visible) {
+      resumeForegroundWork();
+    } else {
+      pauseForegroundWork();
+    }
+  }
+
+  async function pollPdaTabState() {
+    pdaTabTimer = null;
+    if (!isPdaRuntime() || !pdaTabStateSupported) return;
+    let state = null;
+    try { state = await pdaCall('PDA_getTabState'); } catch { state = null; }
+    if (state && typeof state === 'object' && 'isActiveTab' in state) {
+      pdaTabFailures = 0;
+      const wasVisible = pdaTabVisible();
+      pdaTabState = { active: state.isActiveTab !== false, visible: state.isWebViewVisible !== false };
+      const nowVisible = pdaTabVisible();
+      if (wasVisible !== nowVisible) {
+        incStat(nowVisible ? 'pdaTabShown' : 'pdaTabHidden');
+        onPdaVisibilityChanged(nowVisible);
+      }
+    } else if (++pdaTabFailures >= 3) {
+      // An app without the handler: fall back to page visibility alone, and never stay paused on a stale answer.
+      pdaTabStateSupported = false;
+      const wasHidden = !pdaTabVisible();
+      pdaTabState = null;
+      if (wasHidden) onPdaVisibilityChanged(true);
+      return;
+    }
+    pdaTabTimer = setTimeout(pollPdaTabState, PDA_TAB_POLL_MS);
+  }
+
+  // Resolves after the first answer (or failure), at most 1 s, so a tab opened in the background never starts with a
+  // burst of requests before the app says it is hidden.
+  function startPdaTabStatePolling() {
+    if (!isPdaRuntime() || pdaTabTimer) return Promise.resolve();
+    return Promise.race([pollPdaTabState(), sleep(1_000)]);
+  }
+
+  async function shareDiagnostics() {
+    const payload = JSON.stringify(getDiagnosticSnapshot(), null, 2);
+    if (isPdaRuntime()) {
+      try {
+        await pdaCall('copyToClipboard', payload);
+        pdaToast('Diagnostics copied to the clipboard', 'success');
+        return payload;
+      } catch { /* Fall back to the prompt below. */ }
+    }
+    window.prompt(`${SCRIPT} v${SCRIPT_VERSION} diagnostics - copy this text if troubleshooting is needed:`, payload);
+    return payload;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Tools (v0.26): one list for the in-page tools sheet and the userscript menu. Torn PDA has no userscript menu, so
+  // before this sheet the clear/reset/diagnostics commands were out of reach there.
+  // ---------------------------------------------------------------------------
+  function confirmThen(question, action) {
+    return () => { if (window.confirm(`${SCRIPT}: ${question}`)) action(); };
+  }
+
+  function toolActions() {
+    return [
+      { group: 'Keys', label: 'Set API key', run: () => { setManualApiKey(); } },
+      { group: 'Keys', label: 'Set attack-history key (Limited)', run: () => { setAttackApiKey(); } },
+      { group: 'Keys', label: 'Clear attack-history key', run: confirmThen('remove the attack-history key?', clearAttackApiKey) },
+      { group: 'Hunt', label: 'Hunt mode on/off', run: () => setHuntEnabled(!huntState.enabled) },
+      { group: 'Hunt', label: 'Restart hunt scan from my ID', run: confirmThen('restart the hunt scan from your own ID? The saved list is kept.', () => { resetHuntCursor(); twoStorage.flush().finally(() => window.location.reload()); }) },
+      { group: 'Hunt', label: 'Clear hunt list', run: confirmThen('delete every saved hunt target?', () => clearStoredAndReload(HUNT_STORAGE)) },
+      { group: 'Settings and help', label: 'Target rules (SET)', run: () => { openSettingsDialog(); } },
+      { group: 'Settings and help', label: diagnosticsLabel(), run: () => { shareDiagnostics(); } },
+      { group: 'Settings and help', label: 'Reset settings', run: confirmThen('reset all settings to their defaults?', () => clearStoredAndReload(SETTINGS_STORAGE)) },
+      { group: 'Clear data', label: 'Clear cached ages', run: confirmThen('clear cached account ages?', () => clearStoredAndReload(SIGNUP_CACHE_STORAGE, LEGACY_PROFILE_CACHE_STORAGE)) },
+      { group: 'Clear data', label: 'Clear cached statuses', run: confirmThen('clear cached faction statuses?', () => clearStoredAndReload(FACTION_STATUS_CACHE_STORAGE)) },
+      { group: 'Clear data', label: 'Clear cached attack dots', run: confirmThen('clear cached attack dots?', () => clearStoredAndReload(ATTACK_HISTORY_CACHE_STORAGE)) },
+      // The attack cursor must go too, otherwise only the newest page would be re-read after the reload.
+      { group: 'Clear data', label: 'Clear personal intel memory', run: confirmThen('forget all personal intel (fights, Fair Fight, estimates)?', () => clearStoredAndReload(OPPONENT_INTEL_STORAGE, SELF_INTEL_STORAGE, STRENGTH_CACHE_STORAGE, ATTACK_HISTORY_CACHE_STORAGE)) },
+    ];
+  }
+
+  function diagnosticsLabel() {
+    return isPdaRuntime() ? 'Copy diagnostics' : 'Show diagnostics';
+  }
+
+  let toolsSheet = null;
+
+  function closeToolsSheet() {
+    if (toolsSheet) toolsSheet.remove();
+    toolsSheet = null;
+  }
+
+  function openToolsSheet() {
+    closeToolsSheet();
+    const overlay = document.createElement('div');
+    overlay.className = 'two-tools-overlay';
+    overlay.addEventListener('click', event => { if (event.target === overlay) closeToolsSheet(); });
+    const sheet = document.createElement('div');
+    sheet.className = 'two-tools-sheet';
+    sheet.setAttribute('role', 'dialog');
+    sheet.setAttribute('aria-label', `${SCRIPT} tools`);
+    const title = document.createElement('div');
+    title.className = 'two-tools-title';
+    title.textContent = `${SCRIPT} v${SCRIPT_VERSION}`;
+    sheet.appendChild(title);
+    let group = '';
+    for (const action of toolActions()) {
+      if (action.group !== group) {
+        group = action.group;
+        const heading = document.createElement('div');
+        heading.className = 'two-tools-group';
+        heading.textContent = group;
+        sheet.appendChild(heading);
+      }
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'two-tools-btn';
+      button.textContent = action.label;
+      button.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        closeToolsSheet();
+        action.run();
+      });
+      sheet.appendChild(button);
+    }
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'two-tools-btn two-tools-close';
+    close.textContent = 'Close';
+    close.addEventListener('click', event => { event.preventDefault(); closeToolsSheet(); });
+    sheet.appendChild(close);
+    overlay.appendChild(sheet);
+    (document.body || document.documentElement).appendChild(overlay);
+    toolsSheet = overlay;
   }
 
   function injectStyles() {
@@ -4867,6 +5059,16 @@
       .two-hd-detail div { padding:2px 0; }
       .two-hd-stop { appearance:none; -webkit-appearance:none; margin-top:6px; min-height:40px; padding:0 14px; border-radius:8px; border:1px solid rgba(255,120,100,.55); background:rgba(80,24,18,.7); color:#ffd0c8; font:700 12px Arial,sans-serif; cursor:pointer; }
       .two-hd-pill { appearance:none; -webkit-appearance:none; min-height:44px; padding:0 16px; border-radius:22px; border:1px solid #ffb470; background:#ff9a3c; color:#1a0d00; font:800 13px/1 Arial,sans-serif; box-shadow:0 2px 10px rgba(0,0,0,.5); cursor:pointer; touch-action:manipulation; }
+      .two-hd-buttons { display:flex; gap:8px; flex-wrap:wrap; margin-top:6px; }
+      .two-hd-buttons .two-hd-stop { margin-top:0; }
+      .two-hd-tools { appearance:none; -webkit-appearance:none; margin-top:6px; min-height:40px; padding:0 14px; border-radius:8px; border:1px solid rgba(255,255,255,.25); background:rgba(255,255,255,.08); color:#ddd; font:700 12px Arial,sans-serif; cursor:pointer; touch-action:manipulation; }
+      .two-hd-buttons .two-hd-tools { margin-top:0; }
+      .two-tools-overlay { position:fixed; inset:0; z-index:100001; background:rgba(0,0,0,.55); display:flex; align-items:flex-end; justify-content:center; }
+      .two-tools-sheet { box-sizing:border-box; width:min(100vw, 520px); max-height:80vh; overflow:auto; padding:12px 12px calc(env(safe-area-inset-bottom, 0px) + 12px); border-radius:14px 14px 0 0; background:#151515; border:1px solid rgba(255,255,255,.16); color:#ddd; font:700 13px/1.3 Arial,sans-serif; box-shadow:0 -6px 20px rgba(0,0,0,.6); }
+      .two-tools-title { color:#fff; font-size:14px; padding:2px 2px 8px; }
+      .two-tools-group { color:#999; font-size:10px; letter-spacing:.4px; text-transform:uppercase; padding:10px 2px 4px; }
+      .two-tools-btn { appearance:none; -webkit-appearance:none; display:block; width:100%; min-height:44px; margin:0 0 6px; padding:0 14px; text-align:left; border-radius:8px; border:1px solid rgba(255,255,255,.14); background:rgba(255,255,255,.06); color:#eee; font:700 13px Arial,sans-serif; cursor:pointer; touch-action:manipulation; }
+      .two-tools-btn.two-tools-close { margin-top:10px; text-align:center; background:rgba(255,255,255,.12); }
       .two-attack-hunt { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:4px; padding-top:4px; border-top:1px solid rgba(255,255,255,.12); }
       .two-hunt-toggle { appearance:none; -webkit-appearance:none; margin:0; padding:3px 7px; border-radius:4px; border:1px solid rgba(255,153,51,.6); background:rgba(60,32,8,.7); color:#ffc58a; font:800 9px/1 Arial,sans-serif; letter-spacing:.3px; cursor:pointer; touch-action:manipulation; }
       .two-attack-detail { margin-top:4px; padding-top:4px; border-top:1px solid rgba(255,255,255,.12); font-weight:400; font-size:10px; color:#ccc; max-height:40vh; overflow:auto; }
@@ -5903,6 +6105,7 @@
       if (err?.message !== 'API backoff active.') console.warn(`[${SCRIPT}] Could not pick a hunt target`, err);
     } finally {
       huntPicking = false;
+      if (!huntNext && huntState.enabled && huntConfirmedCount() === 0) toastOnce('hunt-empty', 'Hunt: no free target right now; scanning for more', 'info', 30 * 60_000);
       saveHuntState();
       renderAttackPanel();
     }
@@ -6266,7 +6469,11 @@
       return row;
     });
     const stop = makeDockButton('two-hd-stop', 'Stop hunting', 'Turn hunt mode off and return to the war panel', () => { huntDetailOpen = false; setHuntEnabled(false); });
-    detail.replaceChildren(...rows, stop);
+    const tools = makeDockButton('two-hd-tools', 'Tools…', 'Keys, hunt list, diagnostics, clear data', () => openToolsSheet());
+    const buttons = document.createElement('div');
+    buttons.className = 'two-hd-buttons';
+    buttons.append(stop, tools);
+    detail.replaceChildren(...rows, buttons);
   }
 
   function onAttackFightFinished(result) {
@@ -6373,7 +6580,8 @@
         ownBarsUnsupported = true;
         ownBarsError = attackApiKey
           ? 'neither of your API keys can read your bars (it needs Minimal or Limited access)'
-          : 'your API key cannot read your bars; set a Limited key with the "set attack-history key" menu command';
+          : 'your API key cannot read your bars; set a Limited attack-history key in Tools';
+        toastOnce('energy-key', `Torn War Overlay: ${ownBarsError}`, 'warn', 24 * 60 * 60_000);
       } else if (err?.message !== 'API backoff active.') {
         ownBarsError = err?.message || 'request failed';
         console.warn(`[${SCRIPT}] Could not read own energy`, err);
@@ -6398,7 +6606,7 @@
   // On the attack page only true backgrounding pauses work: a desktop focus loss (alt-tab, devtools) keeps the page
   // visible, and the panel must keep counting down for when the user comes back.
   function attackPageVisible() {
-    return !document.hidden && !attackPanelHidden;
+    return !document.hidden && !attackPanelHidden && pdaTabVisible();
   }
 
   async function refreshAttackTargetStatus() {
@@ -6558,11 +6766,21 @@
       const intel = intelEnabled() ? getOpponentIntel(userId) : null;
       const lines = intel ? describeIntel(intel, userId).split(' | ') : ['Personal intel is turned off in SET on the faction page.'];
       if (!apiKey) lines.unshift('No API key stored; open the faction page once to set one.');
-      detail.replaceChildren(...lines.map(line => {
-        const row = document.createElement('div');
-        row.textContent = line;
-        return row;
-      }));
+      // Rebuild only on change: a per-second rebuild would swallow a tap on the Tools button.
+      const signature = lines.join('\n');
+      if (detail.dataset.twoSignature !== signature) {
+        detail.dataset.twoSignature = signature;
+        const tools = document.createElement('button');
+        tools.type = 'button';
+        tools.className = 'two-hd-tools';
+        tools.textContent = 'Tools…';
+        tools.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); openToolsSheet(); });
+        detail.replaceChildren(...lines.map(line => {
+          const row = document.createElement('div');
+          row.textContent = line;
+          return row;
+        }), tools);
+      }
     }
   }
 
@@ -6749,6 +6967,9 @@
       apiKey = getStoredApiKey();
       if (!apiKey) return;
     }
+
+    await startPdaTabStatePolling();
+    if (twoStorage.movedNotice) pdaToast(twoStorage.movedNotice, 'success');
 
     if (PAGE_MODE === 'attack') {
       await initAttackPage();
