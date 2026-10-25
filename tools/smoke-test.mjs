@@ -146,7 +146,7 @@ if (!/^HOSP 1:5\d$|^HOSP 2:00$/.test(statusText)) { failed = true; console.error
 if (!String(panel?.__twoStatus?.className || '').includes('two-attack-status-hospital')) { failed = true; console.error('Attack mode: hospital status class missing'); }
 if (!/Dummy \[42\]/.test(panel?.__twoName?.textContent || '')) { failed = true; console.error(`Attack mode: expected target name and level, saw "${panel?.__twoName?.textContent}"`); }
 
-// Hunt mode: IDs 1005 (weak, Okay), 1004 (missing) and 1003 (strong) are scanned at the paced gap, newest first.
+// Hunt mode: IDs 1003 (strong), 1004 (missing) and 1005 (weak, Okay) are scanned at the paced gap, walking upward.
 const huntProfiles = {
   1005: { id: 1005, name: 'Pumpkin', level: 5, rank: 'Beginner', status: { state: 'Okay' }, last_action: { timestamp: nowSec } },
   1003: { id: 1003, name: 'Tank', level: 20, rank: 'Invincible', status: { state: 'Okay' }, last_action: { timestamp: nowSec } },
@@ -178,7 +178,7 @@ const hunt = await boot({
     'two.apiKey.v1': 'ABCDEFGHIJKLMNOP',
     'two.attackApiKey.v1': 'LIMITEDKEYLIMITE',
     'two.selfIntel.v1': JSON.stringify({ bss: 20000 }),
-    'two.hunt.v1': JSON.stringify({ enabled: true, cursor: 1005, pool: { 2001: { n: 'Ghost', l: 3, w: 'r', r: 0.01, s: 'o', t: 0, c: 0, f: 50 } } }),
+    'two.hunt.v1': JSON.stringify({ enabled: true, dir: 'up', cursor: 1003, pool: { 2001: { n: 'Ghost', l: 3, w: 'r', r: 0.01, s: 'o', t: 0, c: 0, f: 50 } } }),
   },
   fetchImpl: huntFetch,
   waitMs: 6_500, // Three scans 1.5 s apart, and the 2 s save throttle must land after the third.
@@ -187,7 +187,7 @@ if (hunt.errors.length > 0) { failed = true; console.error('HUNT MODE ERRORS:', 
 const huntSaved = JSON.parse(hunt.storage.get('two.hunt.v1') || '{}');
 if (!huntSaved.pool?.['1005']) { failed = true; console.error('Hunt mode: weak player 1005 was not kept', huntSaved); }
 if (huntSaved.pool?.['1003']) { failed = true; console.error('Hunt mode: strong player 1003 was kept'); }
-if (!(huntSaved.cursor <= 1002)) { failed = true; console.error(`Hunt mode: expected the cursor past 1003, saw ${huntSaved.cursor}`); }
+if (!(huntSaved.cursor >= 1006) || huntSaved.dir !== 'up') { failed = true; console.error(`Hunt mode: expected the upward cursor past 1005, saw ${huntSaved.cursor} (${huntSaved.dir})`); }
 const ghost = huntSaved.pool?.['2001'];
 if (!ghost || ghost.s !== 'o' || !(ghost.c > 0) || ghost.a !== nowSec - 86400) { failed = true; console.error('Hunt mode: stale target 2001 was not refreshed from its faction roster', ghost); }
 if (huntUrls.filter(url => url.includes('/user/2001/')).length > 0) { failed = true; console.error('Hunt mode: target 2001 was refreshed per user instead of by faction roster'); }
@@ -224,7 +224,7 @@ const pdaSeed = {
   'two.apiKey.v1': 'ABCDEFGHIJKLMNOP',
   'two.attackApiKey.v1': 'LIMITEDKEYLIMITE',
   'two.selfIntel.v1': JSON.stringify({ bss: 20000 }),
-  'two.hunt.v1': JSON.stringify({ enabled: true, cursor: 1005, pool: {} }),
+  'two.hunt.v1': JSON.stringify({ enabled: true, dir: 'up', cursor: 1003, pool: {} }),
   'unrelated.key': 'kept',
 };
 const pdaStore = makePdaStorage();
@@ -234,7 +234,7 @@ if (pdaStore.data.get('two.apiKey.v1') !== 'ABCDEFGHIJKLMNOP' || !pdaStore.data.
 if (Array.from(pda.storage.keys()).some(key => key.startsWith('two.')) || pda.storage.get('unrelated.key') !== 'kept') { failed = true; console.error('PDA storage: localStorage should keep only non-script keys after the move', Array.from(pda.storage.keys())); }
 if (!pda.dock || pda.dock.hidden) { failed = true; console.error('PDA storage: hunt dock should run from the moved data'); }
 const pdaHunt = JSON.parse(pdaStore.data.get('two.hunt.v1') || '{}');
-if (!pdaHunt.pool?.['1005'] || !(pdaHunt.cursor <= 1002)) { failed = true; console.error('PDA storage: later writes should land in PDA_storage', pdaHunt); }
+if (!pdaHunt.pool?.['1005'] || !(pdaHunt.cursor >= 1006)) { failed = true; console.error('PDA storage: later writes should land in PDA_storage', pdaHunt); }
 
 for (const [label, options] of [['failing store', { failLoad: true }], ['mismatching read-back', { corruptReadBack: true }]]) {
   const fallback = await boot({ pathname: '/loader.php', search: '?sid=attack&user2ID=123456', seed: pdaSeed, fetchImpl: huntFetch, globals: { PDA_storage: makePdaStorage(options) } });
@@ -266,7 +266,7 @@ const pdaRuntime = {
 setTimeout(() => { tabState.isActiveTab = true; }, 2_500); // The user switches to this tab.
 const pdaTab = await boot({ pathname: '/loader.php', search: '?sid=attack&user2ID=123456', seed: pdaSeed, globals: pdaRuntime, waitMs: 5_500 });
 if (pdaTab.errors.length > 0) { failed = true; console.error('PDA TAB ERRORS:', pdaTab.errors.join('\n')); }
-const firstScanAt = pdaUrls.findIndex(url => url.includes('/user/1005/profile'));
+const firstScanAt = pdaUrls.findIndex(url => url.includes('/user/1003/profile'));
 const tabAnswersBeforeScan = bridgeCalls.slice(0, Math.max(0, bridgeCalls.length)).filter(([name]) => name === 'PDA_getTabState').length;
 if (firstScanAt < 0) { failed = true; console.error('PDA tab: hunting should start once the tab becomes active'); }
 if (!bridgeCalls.some(([name]) => name === 'PDA_getTabState') || tabAnswersBeforeScan < 2) { failed = true; console.error('PDA tab: tab state should be polled'); }

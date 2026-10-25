@@ -4,6 +4,12 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.28.0 - Hunt scans newer accounts
+
+- The hunt scanner now walks player IDs upward from your own ID + 1 instead of downward. Higher IDs are newer accounts, which are weaker on average, so more of each scan should qualify; walking down went into older, generally stronger accounts.
+- After 100 missing IDs in a row the scan has passed the newest account, so it starts again just above your ID, where statuses have moved on since the last pass.
+- A scan position saved by an earlier version restarts once at your ID + 1. Your saved target pool is kept.
+
 ## 0.27.2 - Basket thresholds are lifetime totals
 
 - v0.27.1 used the Trick or Treat wiki's per-step amounts (5, 10, 25 …) as if they were lifetime totals, so "next basket" named the wrong number. The 2025 forum guide's table gives the running totals, and the dock now uses them: Creepy 5, Freaky 15, Frightful 40, Haunting 90, Shocking 190, Terrifying 440, Horrifying 940, Petrifying 1,940 and Nightmarish 4,440 lifetime treats from attacks.

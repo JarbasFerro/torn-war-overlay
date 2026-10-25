@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.27.2
+// @version      0.28.0
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling, plus a hunt mode that scans for easy wins.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -34,7 +34,7 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const SCRIPT_VERSION = '0.27.2';
+  const SCRIPT_VERSION = '0.28.0';
   const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0260__';
   if (window[INSTANCE_KEY]) {
     console.warn(`[${SCRIPT}] v0.26.0 is already running; duplicate injection ignored.`);
@@ -5688,7 +5688,8 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Hunt mode (v0.23, built for the Halloween event): volume over quality. Walk user IDs downward from your own,
+  // Hunt mode (v0.23, built for the Halloween event): volume over quality. Walk user IDs upward from your own (v0.28:
+  // newer accounts are weaker on average; before that the walk went down into older, stronger accounts),
   // keep everyone you should beat comfortably in a local pool, and offer the next ready one as a NEXT link.
   //
   // One profile request per ID does most of the work: the public rank minus the level triggers is a hard ceiling on
@@ -5715,6 +5716,7 @@
   const HUNT_FRESH_SEC = 10 * 60; // An okay status checked this recently counts as confirmed free.
   const HUNT_MIN_AVAILABLE = 20;
   const HUNT_MAX_AVAILABLE = 100;
+  const HUNT_TOP_MISSES = 100; // This many missing IDs in a row means the scan passed the newest account: start over.
 
   let huntState = loadHuntState();
   let huntWorkerRunning = false;
@@ -5745,7 +5747,10 @@
     const cursor = Number(raw.cursor);
     return {
       enabled: Boolean(raw.enabled),
-      cursor: Number.isFinite(cursor) && cursor > 0 ? Math.floor(cursor) : null,
+      // v0.28 scans upward; a cursor saved by the old downward scan restarts at your ID + 1.
+      cursor: raw.dir === 'up' && Number.isFinite(cursor) && cursor > 0 ? Math.floor(cursor) : null,
+      dir: 'up',
+      miss: raw.dir === 'up' ? Number(raw.miss) || 0 : 0,
       scanned: Number(raw.scanned) || 0,
       found: Number(raw.found) || 0,
       pool: normalizeHuntPool(raw.pool),
@@ -6004,7 +6009,8 @@
     let ownId = Number((await ensurePrimaryKeyInfo())?.info?.user?.id);
     if (!Number.isFinite(ownId) || ownId <= 0) ownId = Number((await apiGet('/user/basic'))?.profile?.id);
     if (!Number.isFinite(ownId) || ownId <= 1) throw new ApiError('Could not read your own user ID.');
-    huntState.cursor = ownId - 1;
+    huntState.cursor = ownId + 1;
+    huntState.miss = 0;
     saveHuntState({ now: true });
     return huntState.cursor;
   }
@@ -6013,21 +6019,31 @@
     return huntState.enabled && PAGE_MODE === 'attack' && attackPageVisible() && apiKey && !apiPermanentlyDisabled && intelEnabled();
   }
 
+  // Past the newest account every ID is missing; go back to just above your own ID, where statuses have moved on since.
+  function huntScanMissed() {
+    huntState.miss = (Number(huntState.miss) || 0) + 1;
+    if (huntState.miss < HUNT_TOP_MISSES) return;
+    huntState.cursor = null;
+    huntState.miss = 0;
+    huntLastNote = 'reached the newest account; starting again just above your ID';
+  }
+
   // Returns the number of requests spent, so the worker can keep its pace per request rather than per ID.
   async function huntScanOne(ownScore) {
     const id = huntState.cursor;
-    huntState.cursor = id - 1;
+    huntState.cursor = id + 1;
     const nowSec = serverNowSec();
     let profile;
     try {
       profile = (await huntApiGet(`/user/${id}/profile`))?.profile;
     } catch (err) {
-      if (Number(err?.code) === 6) { huntState.scanned += 1; return 1; } // No such user.
+      if (Number(err?.code) === 6) { huntState.scanned += 1; huntScanMissed(); return 1; } // No such user.
       if (err?.retryable || err?.message === 'API backoff active.') huntState.cursor = id; // Retry this ID after the backoff.
       throw err;
     }
     huntState.scanned += 1;
-    if (!profile) return 1;
+    if (!profile) { huntScanMissed(); return 1; }
+    huntState.miss = 0;
     if (!profile.id) profile.id = id;
     const verdict = classifyHuntProfile(profile, { ownScore, ownUserId: Number(primaryKeyInfo?.info?.user?.id) || null, ownFaction: ownFactionId, nowSec });
     if (verdict.action === 'skip') return 1;
@@ -6086,8 +6102,7 @@
         const job = huntNextJob();
         if (job.kind === 'idle') { huntLastNote = 'enough targets'; renderAttackPanel(); await sleep(5_000); continue; }
         if (job.kind === 'scan') {
-          const cursor = await ensureHuntCursor();
-          if (cursor < 1) { huntLastNote = 'reached ID 1'; renderAttackPanel(); await sleep(5_000); continue; }
+          await ensureHuntCursor();
         }
         const started = Date.now();
         huntLastNote = job.kind === 'scan' ? 'scanning' : 'refreshing';
@@ -6165,6 +6180,7 @@
 
   function resetHuntCursor() {
     huntState.cursor = null;
+    huntState.miss = 0;
     huntState.scanned = 0;
     huntState.found = 0;
     saveHuntState({ now: true });
@@ -6177,7 +6193,7 @@
     toggle.type = 'button';
     toggle.className = 'two-hunt-toggle';
     toggle.textContent = 'HUNT';
-    toggle.title = 'Halloween hunt mode: scan player IDs downward from yours and keep a pool of easy wins. Tap to start.';
+    toggle.title = 'Halloween hunt mode: scan player IDs upward from yours (newer accounts) and keep a pool of easy wins. Tap to start.';
     toggle.addEventListener('click', event => {
       event.preventDefault();
       event.stopPropagation();
