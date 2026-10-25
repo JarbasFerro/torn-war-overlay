@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Overlay
 // @namespace    jarbas.torn.waroverlay
-// @version      0.29.0
+// @version      0.29.1
 // @description  Ranked-war target overlay for Torn with plain-language match verdicts (EASY/GOOD/RISKY/AVOID), server-synced hospital countdowns, configurable target highlighting, personal Fair Fight memory, expected score per hit, BEST target, war/chain context, and adaptive API polling, plus a hunt mode that scans for easy wins.
 // @author       Jarbas Ferro
 // @license      Copyright Jarbas Ferro
@@ -38,7 +38,7 @@
   if (!PAGE_MODE) return;
 
   const SCRIPT = 'Torn War Overlay';
-  const SCRIPT_VERSION = '0.29.0';
+  const SCRIPT_VERSION = '0.29.1';
   const INSTANCE_KEY = '__TORN_WAR_OVERLAY_V0260__';
   if (window[INSTANCE_KEY]) {
     console.warn(`[${SCRIPT}] v0.26.0 is already running; duplicate injection ignored.`);
@@ -5059,6 +5059,7 @@
       .two-basket-bar[hidden], .two-hd-basket[hidden] { display:none !important; }
       .two-basket-fill { height:100%; width:0; background:var(--two-warn); transition:width .3s ease-out; }
       .two-home-next { margin-top:7px; min-height:44px; text-decoration:none; }
+      .two-basket-notice-text { font-size:var(--two-fs-md); color:var(--two-fg); }
       .two-basket-hit { outline:3px solid var(--two-good) !important; outline-offset:-3px; background:var(--two-good-bg) !important; }
       .two-hd-guard { margin-top:5px; padding:3px 6px; border-left:var(--two-edge) solid var(--two-strip-border); border-radius:var(--two-r-sm); font-size:var(--two-fs-sm); background:var(--two-strip); color:var(--two-fg); }
       .two-hd-guard-bad { border-left-color:var(--two-bad); color:var(--two-bad); background:var(--two-bad-bg); }
@@ -7329,31 +7330,84 @@
     window.addEventListener('pagehide', () => flushPersistentState());
   }
 
-  // Items page: arrived through the basket shortcut within the last minute, so find the basket row, scroll to it and
-  // highlight it. Torn loads the list after the page, so look for up to 10 s. Never clicks anything.
+  // Items page: arrived through the basket shortcut within the last minute. Torn keeps one ul.itemsList per category and
+  // hides the inactive ones (aria-hidden="true"), so only a basket row the player can see counts. If the open list has
+  // none, a notice offers "Show Special Items": the player's tap switches Torn's tab (one action per click), then the
+  // basket is scrolled to and highlighted once that list loads. Nothing is clicked without a tap.
+  function isShown(el) {
+    return Boolean(el) && !el.closest?.('[aria-hidden="true"]') && (typeof el.getClientRects !== 'function' || el.getClientRects().length > 0);
+  }
+
   function findBasketRow() {
-    for (const li of document.querySelectorAll('li[data-item], ul.items-cont > li, li')) {
+    for (const li of document.querySelectorAll('ul.itemsList > li, li[data-item]')) {
       const text = li.textContent || '';
-      if (/Halloween Basket/i.test(text) && text.length < 400) return li;
+      if (/Halloween Basket/i.test(text) && text.length < 400 && isShown(li)) return li;
     }
     return null;
+  }
+
+  function findSpecialTab() {
+    for (const el of document.querySelectorAll('[title], [aria-label], [data-title]')) {
+      if (el.closest?.('.two-hunt-dock')) continue;
+      const label = `${el.getAttribute('title') || ''} ${el.getAttribute('aria-label') || ''} ${el.getAttribute('data-title') || ''}`;
+      if (/special/i.test(label) && isShown(el)) return el;
+    }
+    return null;
+  }
+
+  function showBasketNotice(onShowTab) {
+    let notice = document.querySelector?.('.two-basket-notice');
+    if (!notice) {
+      notice = document.createElement('div');
+      notice.className = 'two-hunt-dock two-basket-notice';
+      notice.setAttribute('role', 'status');
+      const text = document.createElement('div');
+      text.className = 'two-basket-notice-text';
+      const buttons = document.createElement('div');
+      buttons.className = 'two-hd-buttons';
+      const show = makeDockButton('two-hd-tools two-basket-show', 'Show Special Items', 'Switch Torn to the Special Items tab, where the basket lives', () => onShowTab());
+      const close = makeDockButton('two-hd-tools', 'Close', 'Hide this notice', () => { notice.hidden = true; });
+      buttons.append(show, close);
+      notice.append(text, buttons);
+      Object.assign(notice, { __text: text, __show: show });
+      (document.body || document.documentElement).appendChild(notice);
+    }
+    notice.hidden = false;
+    const tab = findSpecialTab();
+    notice.__show.hidden = !tab;
+    setText(notice.__text, tab
+      ? 'Your Halloween basket is under Special Items.'
+      : 'Your Halloween basket is under Special Items: tap that tab above.');
+    updateHuntDockOffset(notice);
+    return notice;
   }
 
   function initItemsPage() {
     let at = 0;
     try { at = Number(sessionStorage.getItem(BASKET_JUMP_KEY)) || 0; sessionStorage.removeItem(BASKET_JUMP_KEY); } catch { return; }
     if (!at || Date.now() - at > 60_000) return;
-    const deadline = Date.now() + 10_000;
+    let deadline = Date.now() + 3_000;
+    let noticeShown = false;
     const look = () => {
       const row = findBasketRow();
       if (row) {
         row.classList.add('two-basket-hit');
         try { row.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch { row.scrollIntoView(); }
+        const notice = document.querySelector?.('.two-basket-notice');
+        if (notice) notice.hidden = true;
         pdaToast('Your Halloween basket: tap it, then Use', 'info', 4);
         return;
       }
-      if (Date.now() > deadline) { pdaToast('Basket not in this list: open the Special Items tab', 'warn', 6); return; }
-      setTimeout(look, 400);
+      if (Date.now() <= deadline) { setTimeout(look, 300); return; }
+      if (!noticeShown) {
+        noticeShown = true;
+        showBasketNotice(() => {
+          const tab = findSpecialTab();
+          if (tab) tab.click(); // The player's tap on "Show Special Items" is the one action.
+          deadline = Date.now() + 15_000;
+          setTimeout(look, 300);
+        });
+      }
     };
     look();
   }

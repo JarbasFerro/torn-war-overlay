@@ -111,7 +111,7 @@ async function boot({ pathname, search, seed = {}, fetchImpl = null, waitMs = 15
   vm.createContext(sandbox);
   vm.runInContext(source, sandbox, { filename: 'torn-war-overlay.user.js' });
   await new Promise(resolve => setTimeout(resolve, waitMs));
-  return { errors, warnings, promptCalls, storage, menu, mounted: body.children.length, panel: body.children.find(node => node.__twoName) || null, dock: body.children.find(node => node.__twoHuntDock) || null, home: body.children.find(node => node.__twoHomeCard) || null };
+  return { errors, warnings, promptCalls, storage, menu, mounted: body.children.length, panel: body.children.find(node => node.__twoName) || null, dock: body.children.find(node => node.__twoHuntDock) || null, home: body.children.find(node => node.__twoHomeCard) || null, body };
 }
 
 let failed = false;
@@ -226,6 +226,16 @@ const homeOff = await boot({ pathname: '/index.php', search: '', seed: { 'two.ap
 if (homeOff.home || homeOff.errors.length > 0) { failed = true; console.error('Home: no card (and no errors) while hunt mode is off', homeOff.errors); }
 const items = await boot({ pathname: '/item.php', search: '', seed: { 'two.apiKey.v1': 'ABCDEFGHIJKLMNOP' }, waitMs: 300 });
 if (items.errors.length > 0) { failed = true; console.error('ITEMS ERRORS:', items.errors.join('\n')); }
+// Arrived through Basket ▸ but the basket is not in the open list: a notice points to Special Items after 3 s.
+const jumpStore = new Map([['two.basketJump', String(Date.now())]]);
+const itemsJump = await boot({
+  pathname: '/item.php', search: '', seed: { 'two.apiKey.v1': 'ABCDEFGHIJKLMNOP' }, waitMs: 3_600,
+  globals: { sessionStorage: { getItem: k => jumpStore.get(k) ?? null, setItem: (k, v) => jumpStore.set(k, String(v)), removeItem: k => jumpStore.delete(k) } },
+});
+const basketNotice = itemsJump.body?.children?.find(node => node.__show);
+if (itemsJump.errors.length > 0 || !basketNotice || basketNotice.hidden || !/Special Items/.test(basketNotice.__text?.textContent || '')) {
+  failed = true; console.error('Items: basket notice missing', itemsJump.errors, basketNotice?.__text?.textContent);
+}
 
 // Torn PDA native storage, modelled on userscripts/TornPDA_Storage.md: async, JSON values, setMany/getMany batches.
 function makePdaStorage({ failLoad = false, corruptReadBack = false } = {}) {

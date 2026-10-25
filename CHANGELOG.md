@@ -4,6 +4,11 @@ All notable Torn War Overlay changes are documented here.
 
 The project is currently in release-candidate status. Version numbering before v1.0 reflects rapid iterative development and real-war validation.
 
+## 0.29.1 - Basket shortcut finds the visible basket
+
+- `Basket ▸` landed on the items page without finding the basket. Torn keeps a list per category and hides the inactive ones, so the basket was found in the hidden Special Items list and the scroll had nothing to show. Only the list you can see now counts.
+- When the open list has no basket, a notice at the bottom says it is under Special Items, with a `Show Special Items` button. Your tap switches Torn's tab; the script then scrolls to the basket and highlights it as soon as that list loads. If the tab cannot be found, the notice tells you to tap it yourself.
+
 ## 0.29.0 - Hunt from the home page, basket progress and basket shortcut
 
 - Home page: while hunt mode is on, a card docked at the bottom of Torn's home page shows `ATTACK ▸ Name`, which opens the next hunt target's attack page in one tap, plus how many targets are ready and your energy as hits. Before offering a target it re-checks that player's status (at most 4 requests); scanning for new targets still happens only on the attack page. `×` hides the card until you next open Torn.
